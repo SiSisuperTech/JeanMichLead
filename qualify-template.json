@@ -281,7 +281,7 @@
       "name": "9. Build Gemini Prompt",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [2960, 700]
+      "position": [3180, 700]
     },
     {
       "parameters": {
