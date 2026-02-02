@@ -1,0 +1,496 @@
+{
+  "name": "Slack Lead Dentaire → HubSpot avec Gemini (FINAL)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "0",
+      "name": "0. MANUAL TEST TRIGGER",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [100, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// EDIT THIS LEAD DATA FOR TESTING\nconst testLead = {\n  body: {\n    type: \"event_callback\",\n    event: {\n      type: \"message\",\n      text: \"A new lead has arrived : Anny-claude Leopold - France (33240)→ Coming from Meta - Demo Request→ Phone : +33 6 30 57 91 60 // Mobile :  // Email : poohleac@gmail.com→ Sales owner : Alan Rossato\",\n      channel: \"C08V21QL6KB\",\n      ts: \"1234567890.123456\",\n      bot_id: null\n    }\n  }\n};\n\n// Uncomment below to test a Dentiste lead:\n// testLead.body.event.text = \"A new lead has arrived : Dr. Martin Dupont - France (75001)→ Coming from Website - Demo Request→ Phone : +33 1 23 45 67 89 // Email : martin.dupont@dentiste.fr\";\n\n// Uncomment below to test a Spam lead:\n// testLead.body.event.text = \"A new lead has arrived : Test Spam - Unknown ()→ Coming from Unknown → Email : spam@test.com\";\n\nreturn { json: testLead };"
+      },
+      "id": "0b",
+      "name": "0b. Create Test Lead",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [320, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack-lead-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "1. Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [100, 400],
+      "webhookId": "slack-lead-webhook"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Prepare response for Slack (both challenge and normal)\nconst body = $json.body || {};\nif (body.type === 'url_verification') {\n  // Return challenge for Slack verification\n  return { json: { _isChallenge: true, challenge: body.challenge } };\n}\n// Normal message - return OK\nreturn { json: { _isChallenge: false, status: 'ok', originalData: $json } };"
+      },
+      "id": "1b",
+      "name": "1b. Prepare Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [320, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "1c",
+      "name": "1c. Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [540, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json._isChallenge }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "1d-check",
+      "name": "1d-check. Was Challenge?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [760, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Restore original data for normal messages\nreturn { json: $json.originalData || $json };"
+      },
+      "id": "1e-restore",
+      "name": "1e. Restore Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [980, 550]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Get data from Webhook (Slack event in body)\nconst input = $input.item.json;\nconst data = input.body || input || {};\nconst event = data.event || data;\n\n// Ignore non-message events and bot/edited messages\nconst isMessage = event && event.type === 'message';\nconst isBot = !!event.bot_id || event.subtype === 'bot_message';\nconst isSubtype = !!event.subtype;\n\nif (!isMessage || isBot || isSubtype) {\n  return {\n    json: {\n      skip: true,\n      reason: !isMessage ? 'Not a message event' : (isBot ? 'Bot message' : 'Message subtype'),\n      slackChannel: event.channel || '',\n      rawMessage: event.text || ''\n    }\n  };\n}\n\nconst message = event.text || '';\nconst slackChannel = event.channel || '';\n\n// Extraction email\nconst emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\\.[a-zA-Z0-9_-]+)/gi;\nconst emails = message.match(emailRegex) || [];\n\n// Extraction téléphone (Mobile prioritaire)\nconst mobileMatch = message.match(/Mobile\\s*:\\s*([+\\d\\s-]+)/i);\nconst phoneMatch = message.match(/Phone\\s*:\\s*([+\\d\\s-]+)/i);\nlet phone = '';\nif (mobileMatch && mobileMatch[1].trim()) {\n  phone = mobileMatch[1].trim();\n} else if (phoneMatch && phoneMatch[1].trim()) {\n  phone = phoneMatch[1].trim();\n}\n\n// Extraction nom complet\nlet fullName = '';\nconst patterns = [\n  /A new lead\\s*:\\s*([^-]+?)\\s*-\\s*[A-Za-z]/i,\n  /A new lead ha[sd] arrived\\s*:\\s*([^-]+?)\\s*-\\s*[A-Za-z]/i,\n  /The following lead has booked[^:]*:\\s*([^-]+?)\\s*-\\s*[A-Za-z]/i\n];\nfor (const pattern of patterns) {\n  const match = message.match(pattern);\n  if (match) {\n    fullName = match[1].trim();\n    break;\n  }\n}\n\nconst nameParts = fullName.split(' ');\nconst firstname = nameParts[0] || '';\nconst lastname = nameParts.slice(1).join(' ') || '';\n\n// Extraction pays et code postal\nconst countryMatch = message.match(/-\\s*([A-Za-z]+)\\s*\\(([^)]+)\\)/);\nconst country = countryMatch ? countryMatch[1].trim() : '';\nconst postalCode = countryMatch ? countryMatch[2].trim() : '';\n\n// Extraction source\nconst sourceMatch = message.match(/Coming from\\s*:\\s*([^\\n]+)/i);\nconst source = sourceMatch ? sourceMatch[1].trim() : '';\n\n// Extraction sales owner\nconst ownerMatch = message.match(/Sales owner\\s*:\\s*([^\\n]+)/i);\nconst salesOwner = ownerMatch ? ownerMatch[1].trim() : '';\n\n// Détection indices email dentiste\nconst emailLower = (emails[0] || '').toLowerCase();\nconst emailHintDentist = /(dr\\.|doc|docteur|cabinet|dentaire|dent)/i.test(emailLower);\n\nreturn {\n  json: {\n    skip: false,\n    slackChannel: slackChannel,\n    rawMessage: message,\n    email: emails[0] || '',\n    phone: phone,\n    firstname: firstname,\n    lastname: lastname,\n    fullName: fullName,\n    country: country,\n    postalCode: postalCode,\n    source: source,\n    salesOwner: salesOwner,\n    emailHintDentist: emailHintDentist\n  }\n};"
+      },
+      "id": "2",
+      "name": "2. Extraction Données Lead",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1200, 550]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "2b",
+      "name": "2b. Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1420, 550]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_HUBSPOT_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filterGroups\": [\n    {\n      \"filters\": [\n        {\n          \"propertyName\": \"email\",\n          \"operator\": \"EQ\",\n          \"value\": \"{{ $json.email }}\"\n        }\n      ]\n    }\n  ],\n  \"properties\": [\"hs_lead_status\", \"lifecyclestage\", \"notes_last_updated\"],\n  \"limit\": 1\n}"
+      },
+      "id": "3",
+      "name": "3. Check Contact HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [1640, 700],
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.results && $json.results.length > 0 }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "4",
+      "name": "4. Contact Existe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1860, 700]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.results[0].id }}/associations/notes",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_HUBSPOT_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5a",
+      "name": "5a. Get Notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [2080, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $node['4. Contact Existe?'].json.results[0].id }}/associations/calls",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_HUBSPOT_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5b",
+      "name": "5b. Get Calls",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [2080, 700],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $node['4. Contact Existe?'].json.results[0].id }}/associations/emails",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_HUBSPOT_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5c",
+      "name": "5c. Get Emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [2080, 800],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const lead = $node['2. Extraction Données Lead'].json;\nconst hubspotResult = $node['4. Contact Existe?'].json;\nconst notesData = $node['5a. Get Notes'].json || {};\nconst callsData = $node['5b. Get Calls'].json || {};\nconst emailsData = $node['5c. Get Emails'].json || {};\n\nconst contactId = hubspotResult.results?.[0]?.id || null;\nconst contactProps = hubspotResult.results?.[0]?.properties || {};\n\nconst notesCount = notesData.results?.length || 0;\nconst callsCount = callsData.results?.length || 0;\nconst emailsCount = emailsData.results?.length || 0;\nconst totalInteractions = notesCount + callsCount + emailsCount;\n\nlet historySummary = '';\nif (totalInteractions > 0) {\n  historySummary = `Contact existant avec ${totalInteractions} interactions:\\n- ${notesCount} notes\\n- ${callsCount} appels\\n- ${emailsCount} emails`;\n  if (contactProps.hs_lead_status) historySummary += `\\nStatut: ${contactProps.hs_lead_status}`;\n  if (contactProps.lifecyclestage) historySummary += `\\nLifecycle: ${contactProps.lifecyclestage}`;\n} else {\n  historySummary = 'Nouveau contact - aucun historique';\n}\n\nreturn {\n  json: {\n    ...lead,\n    hubspotContactId: contactId,\n    hubspotContactExists: !!contactId,\n    hubspotContactProps: contactProps,\n    hubspotNotesCount: notesCount,\n    hubspotCallsCount: callsCount,\n    hubspotEmailsCount: emailsCount,\n    hubspotTotalInteractions: totalInteractions,\n    hubspotHistorySummary: historySummary,\n    hasHistory: totalInteractions > 0\n  }\n};"
+      },
+      "id": "6a",
+      "name": "6a. Merge History",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2300, 700]
+    },
+    {
+      "parameters": {
+        "functionCode": "const lead = $node['2. Extraction Données Lead'].json;\n\nreturn {\n  json: {\n    ...lead,\n    hubspotContactId: null,\n    hubspotContactExists: false,\n    hubspotContactProps: {},\n    hubspotNotesCount: 0,\n    hubspotCallsCount: 0,\n    hubspotEmailsCount: 0,\n    hubspotTotalInteractions: 0,\n    hubspotHistorySummary: 'Nouveau contact - aucun historique HubSpot',\n    hasHistory: false\n  }\n};"
+      },
+      "id": "6b",
+      "name": "6b. No History",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2080, 900]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://serpapi.com/search.json?q={{ encodeURIComponent($json.fullName + ' dentiste OR chirurgien-dentiste OR assistante dentaire') }}&api_key=YOUR_SERPAPI_KEY&engine=google&hl=fr&gl=fr&num=5",
+        "options": {}
+      },
+      "id": "7",
+      "name": "7. SerpAPI Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "continueOnFail": true,
+      "position": [2520, 700]
+    },
+    {
+      "parameters": {
+        "functionCode": "const input = $input.item.json;\nconst lead = input || {};\nconst results = Array.isArray(lead.organic_results) ? lead.organic_results : [];\nconst error = lead.error || null;\n\n// Safe access to lead properties\nconst firstname = (lead.firstname || '') + '';\nconst lastname = (lead.lastname || '') + '';\nconst fullName = (lead.fullName || firstname + ' ' + lastname) + '';\nconst email = (lead.email || '') + '';\n\nlet searchSummary = 'Aucun résultat trouvé.';\nif (error) {\n  searchSummary = `Erreur recherche: ${error}`;\n} else if (results.length > 0) {\n  searchSummary = results.slice(0, 5).map((item, i) => `${i+1}. ${item.title}\\n   ${item.snippet || ''}`).join('\\n\\n');\n}\n\nfunction normalize(str) {\n  return (str || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n}\n\nconst firstnameNorm = normalize(firstname);\nconst lastnameNorm = normalize(lastname);\nlet dentistFoundInSearch = false;\nlet assistantFoundInSearch = false;\nlet exactNameFound = false;\nlet verificationDetails = [];\n\nconst trustedSources = ['doctolib', 'ordre-chirurgiens-dentistes', 'sante.fr', 'ameli.fr', 'annuaire-sante', 'pagesjaunes'];\n\nresults.forEach((item) => {\n  if (!item) return;\n  const text = normalize((item.title || '') + ' ' + (item.snippet || ''));\n  const link = (item.link || '').toLowerCase();\n  const hasFirstname = firstnameNorm.length > 2 && text.includes(firstnameNorm);\n  const hasLastname = lastnameNorm.length > 2 && text.includes(lastnameNorm);\n  const hasFullName = hasFirstname && hasLastname;\n  const isTrustedSource = trustedSources.some(s => link.includes(s));\n  const hasDentistKeyword = /(dentiste|chirurgien-dentiste|cabinet dentaire)/i.test(text);\n  const hasAssistantKeyword = /(assistante dentaire|assistant dentaire)/i.test(text);\n  \n  if (hasFullName && hasDentistKeyword) {\n    dentistFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} trouvé comme dentiste`);\n  } else if (hasFullName && isTrustedSource) {\n    dentistFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} sur source fiable`);\n  } else if (hasFullName && hasAssistantKeyword) {\n    assistantFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} trouvé comme assistante`);\n  }\n});\n\nif (!exactNameFound) {\n  verificationDetails.push(`✗ Aucune correspondance exacte pour '${fullName}'`);\n}\n\nif (lead.emailHintDentist && !dentistFoundInSearch) {\n  verificationDetails.push(`📧 Email suggère dentiste: ${email}`);\n}\n\nreturn {\n  json: {\n    ...lead,\n    firstname: firstname,\n    lastname: lastname,\n    fullName: fullName,\n    searchResults: results,\n    searchSummary: searchSummary,\n    dentistFoundInSearch: dentistFoundInSearch,\n    assistantFoundInSearch: assistantFoundInSearch,\n    exactNameFound: exactNameFound,\n    verificationDetails: verificationDetails.join('\\n'),\n    searchError: error\n  }\n};"
+      },
+      "id": "8",
+      "name": "8. Parse Search Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2740, 700]
+    },
+    {
+      "parameters": {
+        "functionCode": "const input = $input.item.json;\nconst lead = input || {};\n\n// Safe access to lead properties\nconst firstname = (lead.firstname || '') + '';\nconst lastname = (lead.lastname || '') + '';\nconst fullName = lead.fullName || (firstname + ' ' + lastname);\nconst email = (lead.email || '') + '';\nconst phone = (lead.phone || '') + '';\nconst country = (lead.country || '') + '';\nconst source = (lead.source || '') + '';\nconst hasHistory = lead.hasHistory || false;\nconst historySummary = lead.hubspotHistorySummary || 'NOUVEAU CONTACT';\nconst dentistFound = lead.dentistFoundInSearch || false;\nconst assistantFound = lead.assistantFoundInSearch || false;\nconst details = lead.verificationDetails || '';\n\nconst prompt = `Tu es un assistant de qualification de leads pour un PRODUIT D'INTELLIGENCE ARTIFICIELLE DENTAIRE.\n\nCONTEXTE: Nous vendons une solution AI pour dentistes. Cible principale: Dentistes. Cible secondaire: Assistantes dentaires.\n\n=== LEAD ===\nPrénom: ${firstname}\nNom: ${lastname}\nEmail: ${email}\nTéléphone: ${phone}\nPays: ${country}\nSource: ${source}\n\n=== HISTORIQUE HUBSPOT ===\n${historySummary}\n\n=== RECHERCHE WEB ===\nDentiste trouvé: ${dentistFound ? 'OUI' : 'NON'}\nAssistante trouvée: ${assistantFound ? 'OUI' : 'NON'}\nDétails: ${details}\n\n=== RÈGLES DE SCORING ===\n1. PROFIL (0-100): Dentiste confirmé=100, Email dr/doc=90, Inconnu+Demo Request=70, Assistante=50, SPAM=0\n2. BUDGET (0-100): Cabinet=80, Inconnu=50\n3. BESOIN (0-100): Website Demo=100, Meta Demo=70, Autre=50\n4. TIMING (0-100): Calendly=100, Demo Request=80, Autre=50\nBonus décideur: +10 si CEO/fondateur/gérant\nSeuil: Score >= 70 → qualified = true\n\nRÉPONDS EN JSON UNIQUEMENT:\n{\n  \"qualified\": true/false,\n  \"score\": 0-100,\n  \"profile_type\": \"Dentiste\" | \"Assistante Dentaire\" | \"Autre\" | \"SPAM\",\n  \"is_dentist\": true/false,\n  \"is_decision_maker\": true/false,\n  \"profile_score\": 0-100,\n  \"budget_score\": 0-100,\n  \"need_score\": 0-100,\n  \"timing_score\": 0-100,\n  \"reasoning\": \"explication courte\",\n  \"red_flags\": [],\n  \"opportunities\": [],\n  \"recommended_action\": \"action\"\n}`;\n\n// Return the prompt and lead data for the HTTP Request node\nreturn {\n  json: {\n    _leadData: lead,\n    _prompt: prompt\n  }\n};"
+      },
+      "id": "9",
+      "name": "9. Build Gemini Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2960, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"{{ $json._prompt }}\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"responseMimeType\": \"application/json\",\n    \"temperature\": 0.1\n  }\n}",
+        "options": {}
+      },
+      "id": "9b",
+      "name": "9b. Call Gemini API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [3180, 700],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const geminiResp = $input.item.json;\nconst lead = $node['9. Build Gemini Prompt'].json._leadData || {};\n\n// Gemini REST API returns: { candidates: [{ content: { parts: [{ text: \"...\" }] }] }] }\nlet text = '';\n\nif (geminiResp.candidates && geminiResp.candidates[0]) {\n  text = geminiResp.candidates[0].content?.parts[0]?.text || '';\n} else if (geminiResp.text) {\n  text = geminiResp.text;\n} else if (typeof geminiResp === 'string') {\n  text = geminiResp;\n}\n\nfunction parseJson(s) {\n  let clean = String(s).trim();\n  clean = clean.replace(/^```json\\s*/, '').replace(/\\s*```$/, '');\n  const start = clean.indexOf('{');\n  const end = clean.lastIndexOf('}');\n  if (start === -1 || end <= start) {\n    return { error: 'No JSON found', raw: s };\n  }\n  try {\n    return JSON.parse(clean.slice(start, end + 1));\n  } catch (e) {\n    return { error: e.message, raw: s };\n  }\n}\n\nconst qual = parseJson(text);\nconst score = Math.min(100, Math.max(0, Number(qual.score) || 50));\nconst qualified = score >= 70;\n\nreturn {\n  json: {\n    ...lead,\n    geminiRawResponse: text,\n    qualified: qualified,\n    qualificationScore: score,\n    profileType: qual.profile_type || 'Inconnu',\n    is_dentist: qual.is_dentist || false,\n    is_decision_maker: qual.is_decision_maker || false,\n    profile_score: qual.profile_score || 50,\n    budget_score: qual.budget_score || 50,\n    need_score: qual.need_score || 50,\n    timing_score: qual.timing_score || 50,\n    reasoning: qual.reasoning || '',\n    red_flags: qual.red_flags || [],\n    opportunities: qual.opportunities || [],\n    recommended_action: qual.recommended_action || 'Contacter',\n    parseError: qual.error || null\n  }\n};"
+      },
+      "id": "10",
+      "name": "10. Parse Qualification",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [3400, 700]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json.qualified }}", "value2": true }]
+        }
+      },
+      "id": "11",
+      "name": "11. Lead Qualifié?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [3620, 700]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.hubspotContactId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_HUBSPOT_API_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"properties\": {\n    \"lifecyclestage\": \"lead\",\n    \"hs_lead_status\": \"OPEN\",\n    \"lead_status\": \"Qualified\"\n  }\n}"
+      },
+      "id": "12",
+      "name": "12. Update HubSpot QUALIFIED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [3840, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.hubspotContactId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_HUBSPOT_API_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"properties\": {\n    \"hs_lead_status\": \"UNQUALIFIED\",\n    \"lead_status\": \"KO\"\n  }\n}"
+      },
+      "id": "13",
+      "name": "13. Update HubSpot KO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [3840, 800],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const d = $input.item.json;\nconst isQualified = d.qualified || false;\nconst emoji = isQualified ? '✅' : '❌';\nconst status = isQualified ? 'QUALIFIÉ' : 'NON QUALIFIÉ';\nconst msg = `${emoji} LEAD ${status}\\n\\n👤 ${d.fullName}\\n📧 ${d.email}\\n📞 ${d.phone}\\n🏥 ${d.profileType}\\n📊 Score: ${d.qualificationScore}/100\\n\\n💡 ${d.reasoning || d.recommended_action}`;\nreturn { json: { ...d, slackMessage: msg } };"
+      },
+      "id": "14",
+      "name": "14. Format Slack",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [4060, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_SLACK_TOKEN" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"C08V21QL6KB\",\n  \"text\": \"{{ $json.slackMessage }}\"\n}"
+      },
+      "id": "15",
+      "name": "15. Slack Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [4280, 700],
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "0. MANUAL TEST TRIGGER": {
+      "main": [[{"node": "0b. Create Test Lead", "type": "main", "index": 0}]]
+    },
+    "0b. Create Test Lead": {
+      "main": [[{"node": "2. Extraction Données Lead", "type": "main", "index": 0}]]
+    },
+    "1. Webhook": {
+      "main": [[{"node": "1b. Prepare Response", "type": "main", "index": 0}]]
+    },
+    "1b. Prepare Response": {
+      "main": [[{"node": "1c. Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "1c. Respond to Webhook": {
+      "main": [[{"node": "1d-check. Was Challenge?", "type": "main", "index": 0}]]
+    },
+    "1d-check. Was Challenge?": {
+      "main": [
+        [],
+        [{"node": "1e. Restore Data", "type": "main", "index": 0}]
+      ]
+    },
+    "1e. Restore Data": {
+      "main": [[{"node": "2. Extraction Données Lead", "type": "main", "index": 0}]]
+    },
+    "2. Extraction Données Lead": {
+      "main": [[{"node": "2b. Skip?", "type": "main", "index": 0}]]
+    },
+    "2b. Skip?": {
+      "main": [
+        [],
+        [{"node": "3. Check Contact HubSpot", "type": "main", "index": 0}]
+      ]
+    },
+    "3. Check Contact HubSpot": {
+      "main": [[{"node": "4. Contact Existe?", "type": "main", "index": 0}]]
+    },
+    "4. Contact Existe?": {
+      "main": [
+        [
+          {"node": "5a. Get Notes", "type": "main", "index": 0},
+          {"node": "5b. Get Calls", "type": "main", "index": 0},
+          {"node": "5c. Get Emails", "type": "main", "index": 0}
+        ],
+        [{"node": "6b. No History", "type": "main", "index": 0}]
+      ]
+    },
+    "5a. Get Notes": {
+      "main": [[{"node": "6a. Merge History", "type": "main", "index": 0}]]
+    },
+    "5b. Get Calls": {
+      "main": [[{"node": "6a. Merge History", "type": "main", "index": 0}]]
+    },
+    "5c. Get Emails": {
+      "main": [[{"node": "6a. Merge History", "type": "main", "index": 0}]]
+    },
+    "6a. Merge History": {
+      "main": [[{"node": "7. SerpAPI Search", "type": "main", "index": 0}]]
+    },
+    "6b. No History": {
+      "main": [[{"node": "7. SerpAPI Search", "type": "main", "index": 0}]]
+    },
+    "7. SerpAPI Search": {
+      "main": [[{"node": "8. Parse Search Results", "type": "main", "index": 0}]]
+    },
+    "8. Parse Search Results": {
+      "main": [[{"node": "9. Build Gemini Prompt", "type": "main", "index": 0}]]
+    },
+    "9. Build Gemini Prompt": {
+      "main": [[{"node": "9b. Call Gemini API", "type": "main", "index": 0}]]
+    },
+    "9b. Call Gemini API": {
+      "main": [[{"node": "10. Parse Qualification", "type": "main", "index": 0}]]
+    },
+    "10. Parse Qualification": {
+      "main": [[{"node": "11. Lead Qualifié?", "type": "main", "index": 0}]]
+    },
+    "11. Lead Qualifié?": {
+      "main": [
+        [{"node": "12. Update HubSpot QUALIFIED", "type": "main", "index": 0}],
+        [{"node": "13. Update HubSpot KO", "type": "main", "index": 0}]
+      ]
+    },
+    "12. Update HubSpot QUALIFIED": {
+      "main": [[{"node": "14. Format Slack", "type": "main", "index": 0}]]
+    },
+    "13. Update HubSpot KO": {
+      "main": [[{"node": "14. Format Slack", "type": "main", "index": 0}]]
+    },
+    "14. Format Slack": {
+      "main": [[{"node": "15. Slack Reply", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
