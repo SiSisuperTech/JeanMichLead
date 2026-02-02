@@ -242,6 +242,16 @@
     },
     {
       "parameters": {
+        "functionCode": "// Store lead data for later retrieval (preserves all fields)\nconst lead = $input.item.json || {};\nreturn { json: lead };"
+      },
+      "id": "6c",
+      "name": "6c. Store Lead Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2520, 700]
+    },
+    {
+      "parameters": {
         "method": "GET",
         "url": "=https://serpapi.com/search.json?q={{ encodeURIComponent($json.fullName + ' dentiste OR chirurgien-dentiste OR assistante dentaire') }}&api_key=YOUR_SERPAPI_KEY&engine=google&hl=fr&gl=fr&num=5",
         "options": {}
@@ -251,17 +261,17 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 1,
       "continueOnFail": true,
-      "position": [2520, 700]
+      "position": [2740, 700]
     },
     {
       "parameters": {
-        "functionCode": "// Get search results from SerpAPI node (input)\nconst serpApiData = $input.item.json;\nconst results = Array.isArray(serpApiData.organic_results) ? serpApiData.organic_results : [];\nconst error = serpApiData.error || null;\n\n// Get lead data from history nodes (6a or 6b) - they are directly connected to SerpAPI\nconst historyNode = $node['6a. Merge History'].json || $node['6b. No History'].json || {};\nconst lead = historyNode;\n\nconst firstname = (lead.firstname || '') + '';\nconst lastname = (lead.lastname || '') + '';\nconst fullName = lead.fullName || (firstname + ' ' + lastname);\nconst email = (lead.email || '') + '';\n\nlet searchSummary = 'Aucun résultat trouvé.';\nif (error) {\n  searchSummary = `Erreur recherche: ${error}`;\n} else if (results.length > 0) {\n  searchSummary = results.slice(0, 5).map((item, i) => `${i+1}. ${item.title}\\n   ${item.snippet || ''}`).join('\\n\\n');\n}\n\nfunction normalize(str) {\n  return (str || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n}\n\nconst firstnameNorm = normalize(firstname);\nconst lastnameNorm = normalize(lastname);\nlet dentistFoundInSearch = false;\nlet assistantFoundInSearch = false;\nlet exactNameFound = false;\nlet verificationDetails = [];\n\nconst trustedSources = ['doctolib', 'ordre-chirurgiens-dentistes', 'sante.fr', 'ameli.fr', 'annuaire-sante', 'pagesjaunes'];\n\nresults.forEach((item) => {\n  if (!item) return;\n  const text = normalize((item.title || '') + ' ' + (item.snippet || ''));\n  const link = (item.link || '').toLowerCase();\n  const hasFirstname = firstnameNorm.length > 2 && text.includes(firstnameNorm);\n  const hasLastname = lastnameNorm.length > 2 && text.includes(lastnameNorm);\n  const hasFullName = hasFirstname && hasLastname;\n  const isTrustedSource = trustedSources.some(s => link.includes(s));\n  const hasDentistKeyword = /(dentiste|chirurgien-dentiste|cabinet dentaire)/i.test(text);\n  const hasAssistantKeyword = /(assistante dentaire|assistant dentaire)/i.test(text);\n  \n  if (hasFullName && hasDentistKeyword) {\n    dentistFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} trouvé comme dentiste`);\n  } else if (hasFullName && isTrustedSource) {\n    dentistFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} sur source fiable`);\n  } else if (hasFullName && hasAssistantKeyword) {\n    assistantFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} trouvé comme assistante`);\n  }\n});\n\nif (!exactNameFound) {\n  verificationDetails.push(`✗ Aucune correspondance exacte pour '${fullName}'`);\n}\n\nif (lead.emailHintDentist && !dentistFoundInSearch) {\n  verificationDetails.push(`📧 Email suggère dentiste: ${email}`);\n}\n\n// Return ALL data including original lead info and search results\nreturn {\n  json: {\n    ...lead,\n    searchResults: results,\n    searchSummary: searchSummary,\n    dentistFoundInSearch: dentistFoundInSearch,\n    assistantFoundInSearch: assistantFoundInSearch,\n    exactNameFound: exactNameFound,\n    verificationDetails: verificationDetails.join('\\n'),\n    searchError: error\n  }\n};"
+        "functionCode": "// Get search results from SerpAPI (input)\nconst serpApiData = $input.item.json;\nconst results = Array.isArray(serpApiData.organic_results) ? serpApiData.organic_results : [];\nconst error = serpApiData.error || null;\n\n// Get lead data from Node 6c (directly connected, stores all lead info)\nconst lead = $node['6c. Store Lead Data'].json || {};\n\nconst firstname = (lead.firstname || '') + '';\nconst lastname = (lead.lastname || '') + '';\nconst fullName = lead.fullName || (firstname + ' ' + lastname);\nconst email = (lead.email || '') + '';\n\nlet searchSummary = 'Aucun résultat trouvé.';\nif (error) {\n  searchSummary = `Erreur recherche: ${error}`;\n} else if (results.length > 0) {\n  searchSummary = results.slice(0, 5).map((item, i) => `${i+1}. ${item.title}\\n   ${item.snippet || ''}`).join('\\n\\n');\n}\n\nfunction normalize(str) {\n  return (str || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n}\n\nconst firstnameNorm = normalize(firstname);\nconst lastnameNorm = normalize(lastname);\nlet dentistFoundInSearch = false;\nlet assistantFoundInSearch = false;\nlet exactNameFound = false;\nlet verificationDetails = [];\n\nconst trustedSources = ['doctolib', 'ordre-chirurgiens-dentistes', 'sante.fr', 'ameli.fr', 'annuaire-sante', 'pagesjaunes'];\n\nresults.forEach((item) => {\n  if (!item) return;\n  const text = normalize((item.title || '') + ' ' + (item.snippet || ''));\n  const link = (item.link || '').toLowerCase();\n  const hasFirstname = firstnameNorm.length > 2 && text.includes(firstnameNorm);\n  const hasLastname = lastnameNorm.length > 2 && text.includes(lastnameNorm);\n  const hasFullName = hasFirstname && hasLastname;\n  const isTrustedSource = trustedSources.some(s => link.includes(s));\n  const hasDentistKeyword = /(dentiste|chirurgien-dentiste|cabinet dentaire)/i.test(text);\n  const hasAssistantKeyword = /(assistante dentaire|assistant dentaire)/i.test(text);\n  \n  if (hasFullName && hasDentistKeyword) {\n    dentistFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} trouvé comme dentiste`);\n  } else if (hasFullName && isTrustedSource) {\n    dentistFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} sur source fiable`);\n  } else if (hasFullName && hasAssistantKeyword) {\n    assistantFoundInSearch = true;\n    exactNameFound = true;\n    verificationDetails.push(`✓ ${fullName} trouvé comme assistante`);\n  }\n});\n\nif (!exactNameFound) {\n  verificationDetails.push(`✗ Aucune correspondance exacte pour '${fullName}'`);\n}\n\nif (lead.emailHintDentist && !dentistFoundInSearch) {\n  verificationDetails.push(`📧 Email suggère dentiste: ${email}`);\n}\n\n// Return ALL data including original lead info and search results\nreturn {\n  json: {\n    ...lead,\n    searchResults: results,\n    searchSummary: searchSummary,\n    dentistFoundInSearch: dentistFoundInSearch,\n    assistantFoundInSearch: assistantFoundInSearch,\n    exactNameFound: exactNameFound,\n    verificationDetails: verificationDetails.join('\\n'),\n    searchError: error\n  }\n};"
       },
       "id": "8",
       "name": "8. Parse Search Results",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [2740, 700]
+      "position": [2960, 700]
     },
     {
       "parameters": {
@@ -295,7 +305,7 @@
       "name": "9b. Call Gemini API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 1,
-      "position": [3180, 700],
+      "position": [3400, 700],
       "continueOnFail": true
     },
     {
@@ -306,7 +316,7 @@
       "name": "10. Parse Qualification",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [3400, 700]
+      "position": [3620, 700]
     },
     {
       "parameters": {
@@ -318,7 +328,7 @@
       "name": "11. Lead Qualifié?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [3620, 700]
+      "position": [3840, 700]
     },
     {
       "parameters": {
@@ -339,7 +349,7 @@
       "name": "12. Update HubSpot QUALIFIED",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 1,
-      "position": [3840, 600],
+      "position": [4060, 600],
       "continueOnFail": true
     },
     {
@@ -361,7 +371,7 @@
       "name": "13. Update HubSpot KO",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 1,
-      "position": [3840, 800],
+      "position": [4060, 800],
       "continueOnFail": true
     },
     {
@@ -372,7 +382,7 @@
       "name": "14. Format Slack",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
-      "position": [4060, 700]
+      "position": [4280, 700]
     },
     {
       "parameters": {
@@ -393,7 +403,7 @@
       "name": "15. Slack Reply",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 1,
-      "position": [4280, 700],
+      "position": [4500, 700],
       "continueOnFail": true
     }
   ],
@@ -454,9 +464,12 @@
       "main": [[{"node": "6a. Merge History", "type": "main", "index": 0}]]
     },
     "6a. Merge History": {
-      "main": [[{"node": "7. SerpAPI Search", "type": "main", "index": 0}]]
+      "main": [[{"node": "6c. Store Lead Data", "type": "main", "index": 0}]]
     },
     "6b. No History": {
+      "main": [[{"node": "6c. Store Lead Data", "type": "main", "index": 0}]]
+    },
+    "6c. Store Lead Data": {
       "main": [[{"node": "7. SerpAPI Search", "type": "main", "index": 0}]]
     },
     "7. SerpAPI Search": {
