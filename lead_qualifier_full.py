@@ -303,7 +303,7 @@ def call_ai(prompt: str) -> dict:
                     "count": 5
                 }
             }],
-            "max_tokens": 2000,
+            "max_tokens": 4000,
             "temperature": 0
         }
 

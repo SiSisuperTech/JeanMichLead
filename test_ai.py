@@ -2,26 +2,31 @@
 """Test AI qualification with mock data"""
 
 import os
+import sys
 import json
 from requests import post
 
-# Config
-ZAI_API_KEY = os.getenv("ZAI_API_KEY")
+# Config - accept from env or arg
+ZAI_API_KEY = os.getenv("ZAI_API_KEY") or (sys.argv[1] if len(sys.argv) > 1 else None)
 if not ZAI_API_KEY:
-    print("ERROR: Set ZAI_API_KEY environment variable")
+    print("ERROR: Set ZAI_API_KEY environment variable or pass as argument")
+    print("Usage: python test_ai.py <api_key>")
     exit(1)
 
-# Mock lead data
+# Real lead data
 MOCK_LEAD = {
-    'fullName': 'Dr Jean Dupont',
-    'email': 'jean.dupont@cabinet-dentaire-paris.fr',
-    'phone': '01 23 45 67 89',
+    'fullName': 'Yann Panissard',
+    'email': 'yann-panissard@orange.fr',
+    'phone': '0000000',
     'country': 'France',
-    'postalCode': '75001'
+    'postalCode': '82700'
 }
 
 def build_prompt(lead: dict) -> str:
     """Build AI prompt for GLM-4.7 with web_search tool"""
+    postal = lead.get('postalCode', '')
+    location_hint = f"Postal code: {postal}" if postal else ""
+
     return f"""You are a dental lead qualification analyst for France. You have access to web search - use it to verify leads.
 
 LEAD TO VERIFY:
@@ -29,30 +34,38 @@ Name: {lead.get('fullName', 'Unknown')}
 Email: {lead.get('email', 'Unknown')}
 Phone: {lead.get('phone', 'Unknown')}
 Country: {lead.get('country', 'Unknown')}
+{location_hint}
 
-CRITICAL INSTRUCTIONS:
-1. Use your web_search tool to verify this lead
-2. Search: name + "dentiste", name + "chirurgien dentiste", name + "doctolib"
-3. Check: Doctolib.fr, annuaire.sante.fr, Google, LinkedIn
-4. A Gmail address does NOT automatically mean SPAM - many dentists use Gmail
+CRITICAL INSTRUCTIONS - SEARCH THOROUGHLY:
+1. You MUST search MULTIPLE times before concluding SPAM
+2. ALWAYS include the postal code/city in your searches if provided
+3. Search variations to try:
+   - "{lead.get('fullName', '')}" + "dentiste"
+   - "{lead.get('fullName', '')}" + "chirurgien dentiste"
+   - "{lead.get('fullName', '')}" + postal (if provided)
+   - site:doctolib.fr "{lead.get('fullName', '')}"
+   - site:annuaire.sante.fr "{lead.get('fullName', '')}"
+4. Check: Doctolib.fr, annuaire.sante.fr, PagesJaunes, Google
+5. Orange.fr, Gmail, etc. do NOT mean SPAM - many French dentists use these
 
 SCORING (0-100):
-+50: Found on Doctolib.fr or annuaire.sante.fr as dentist
-+30: Email has dental domain (cabinet*.fr, *dentaire.fr, clinique*.fr)
-+20: Professional email (not gmail/yahoo/hotmail)
++60: Found on Doctolib.fr or annuaire.sante.fr as dentist
++40: Found on PagesJaunes or other directories as dentist
++20: Professional email domain (cabinet*.fr, *dentaire.fr)
 +10: Complete info (name+email+phone)
--20: Gmail (ONLY if no web verification found)
+-10: Personal email (orange.fr, gmail, hotmail) - ONLY if no web verification found
 
 QUALIFICATION:
 Score >= 70: QUALIFIED
 Score < 70: NOT QUALIFIED
 
 ONLY classify as SPAM if:
-- No web presence found AFTER searching
+- You searched THOROUGHLY with multiple variations
+- No web presence found anywhere
 - Name appears nowhere as dentist
 
 Return ONLY JSON:
-{{"is_dentist": true/false, "profile_type": "Dentiste/Orthodontiste/Etudiant/Autre/SPAM", "score": 75, "qualified": true/false, "reasoning": "What you found and where"}}"""
+{{"is_dentist": true/false, "profile_type": "Dentiste/Orthodontiste/Etudiant/Autre/SPAM", "score": 75, "qualified": true/false, "reasoning": "What you searched and where"}}"""
 
 def call_ai(prompt: str) -> dict:
     """Call Z.ai GLM-4.7 with web_search tool"""
@@ -74,7 +87,7 @@ def call_ai(prompt: str) -> dict:
                     "count": 5
                 }
             }],
-            "max_tokens": 2000,
+            "max_tokens": 4000,
             "temperature": 0
         }
 
@@ -82,10 +95,18 @@ def call_ai(prompt: str) -> dict:
 
         response = post(url, headers=headers, json=payload, timeout=120)
 
+        print(f"[DEBUG] Status: {response.status_code}")
+        print(f"[DEBUG] Response: {response.text[:500]}")
+
         if response.status_code != 200:
             return {"error": f"API returned {response.status_code}: {response.text[:200]}"}
 
         data = response.json()
+
+        # Check for choices
+        if "choices" not in data or not data["choices"]:
+            return {"error": "No choices in response", "raw": data}
+
         text = data["choices"][0]["message"]["content"].strip()
         print(f"[AI] Response: {len(text)} chars")
 
@@ -141,9 +162,9 @@ if __name__ == '__main__':
     print()
 
     if result.get("qualified"):
-        print("✅ LEAD QUALIFIED")
+        print("[OK] LEAD QUALIFIED")
     else:
-        print("❌ LEAD NOT QUALIFIED")
+        print("[X] LEAD NOT QUALIFIED")
 
     print(f"Profile: {result.get('profile_type', 'Unknown')}")
     print(f"Score: {result.get('score', 0)}/100")
