@@ -9,14 +9,14 @@ services:
       dockerfile: Dockerfile
     run_command: gunicorn -b 0.0.0.0:$PORT lead_qualifier_full.py:app
     ports:
-      - port: 5678
+      - port: 8000
         protocol: http
     routes:
       - path: /
-        port: 5678
+        port: 8000
     env:
       - name: PORT
-        value: "5678"
+        value: "8000"
       # Set these in Koyeb dashboard:
       # - SLACK_BOT_TOKEN
       # - HUBSPOT_TOKEN

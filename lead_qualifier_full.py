@@ -16,7 +16,7 @@ from requests import post, patch
 # API tokens from environment variables (Railway, local, etc.)
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 HUBSPOT_TOKEN = os.getenv("HUBSPOT_TOKEN")
-PORT = int(os.getenv("PORT", 5678))
+PORT = int(os.getenv("PORT", 8000))
 
 # Warn if tokens missing (but don't exit - allows partial functionality)
 if not SLACK_BOT_TOKEN:
