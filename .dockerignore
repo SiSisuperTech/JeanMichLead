@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Claude
+.claude
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+
+# Virtual env
+venv
+ENV
+env
+
+# IDE
+.vscode
+.idea
+
+# Logs
+*.log
+start.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Other
+tunnel_url.txt
+tunnel_output.txt
+test_*.py
+*.bat

@@ -324,24 +324,103 @@ ONLY classify as SPAM if:
 Return ONLY JSON:
 {{"is_dentist": true/false, "profile_type": "Dentiste/Orthodontiste/Etudiant/Autre/SPAM", "score": 75, "qualified": true/false, "reasoning": "What you found and where"}}"""
 
-# ==================== CALL CLAUDE CODE CLI ====================
+# ==================== CALL AI API (Direct HTTP) ====================
+def call_ai_api(prompt: str) -> dict:
+    """Call Anthropic-compatible API directly (works on Koyeb)"""
+    try:
+        import anthropic
+
+        # Get API config from environment (Koyeb sets these)
+        api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
+        base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+
+        if not api_key:
+            return {"error": "ANTHROPIC_API_KEY not set in environment"}
+
+        log_msg(f"[AI] Using API: {base_url}")
+        log_msg(f"[AI] Prompt length: {len(prompt)} chars")
+
+        # Initialize client with custom base URL
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            base_url=base_url
+        )
+
+        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+
+        log_msg(f"[AI] Calling model: {model}...")
+
+        response = client.messages.create(
+            model=model,
+            max_tokens=2000,
+            temperature=0,
+            messages=[{
+                "role": "user",
+                "content": prompt
+            }]
+        )
+
+        # Extract the response text
+        response_text = response.content[0].text
+        log_msg(f"[AI] Response received: {len(response_text)} chars")
+
+        # Clean up markdown code blocks
+        response_text = response_text.replace("```json", "").replace("```", "").strip()
+
+        # Parse JSON
+        try:
+            result = json.loads(response_text)
+            log_msg(f"[AI] Parsed successfully: {result.get('profile_type', '?')} | Score: {result.get('score', 0)}")
+            return result
+        except json.JSONDecodeError:
+            # Try to find JSON in response
+            brace_count = 0
+            json_start = -1
+            for i, char in enumerate(response_text):
+                if char == '{':
+                    if brace_count == 0:
+                        json_start = i
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0 and json_start >= 0:
+                        try:
+                            json_str = response_text[json_start:i+1]
+                            result = json.loads(json_str)
+                            log_msg(f"[AI] Parsed with extraction: {result.get('profile_type', '?')}")
+                            return result
+                        except json.JSONDecodeError:
+                            json_start = -1
+                            continue
+
+            return {
+                "error": "No valid JSON in response",
+                "raw_preview": response_text[:500] if len(response_text) > 500 else response_text
+            }
+
+    except ImportError:
+        return {"error": "anthropic package not installed - run: pip install anthropic"}
+    except Exception as e:
+        return {"error": f"API call failed: {str(e)}"}
+
+# Fallback to Claude CLI for local development
 def call_claude_code(prompt: str) -> dict:
-    """Call Claude Code CLI with GLM config"""
+    """Try API first, fallback to CLI for local development"""
+    # If running in production (Koyeb), use API
+    if os.getenv("KOYEB") or os.getenv("ANTHROPIC_API_KEY"):
+        log_msg("[AI] Using direct API (production mode)")
+        return call_ai_api(prompt)
+
+    # Otherwise try CLI for local development
     try:
         env = os.environ.copy()
-
-        # Get absolute script directory
         script_dir = os.path.dirname(os.path.abspath(__file__))
         config_dir = os.path.join(script_dir, ".claude")
         config_path = os.path.join(config_dir, "config.json")
 
-        print(f"[CONFIG] Script dir: {script_dir}")
-        print(f"[CONFIG] Config dir: {config_dir}")
-
         env["CLAUDE_CONFIG_DIR"] = config_dir
         env["PYTHONIOENCODING"] = "utf-8"
 
-        # Read the API key from config and set it directly
         api_key = ""
         try:
             with open(config_path, 'r') as f:
@@ -350,21 +429,17 @@ def call_claude_code(prompt: str) -> dict:
                 base_url = config.get("env", {}).get("ANTHROPIC_BASE_URL", "")
                 if api_key:
                     env["ANTHROPIC_AUTH_TOKEN"] = api_key
-                    log_msg(f"[CONFIG] API key loaded: {api_key[:20]}...")
                 if base_url:
                     env["ANTHROPIC_BASE_URL"] = base_url
-                    log_msg(f"[CONFIG] Base URL: {base_url}")
-        except Exception as e:
-            log_msg(f"[CONFIG] Error loading config: {e}")
+        except Exception:
+            pass
 
-        # Windows-specific config
         startupinfo = None
         if sys.platform == "win32":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-        log_msg(f"[AI] Calling Claude CLI ({len(prompt)} chars)...")
-        log_msg(f"[AI] Prompt preview: {prompt[:200]}...")
+        log_msg(f"[AI] Using Claude CLI (local mode)...")
 
         result = subprocess.run(
             'claude --dangerously-skip-permissions',
@@ -379,26 +454,17 @@ def call_claude_code(prompt: str) -> dict:
             startupinfo=startupinfo
         )
 
-        log_msg(f"[AI] CLI done (exit code: {result.returncode})")
-
-        response = result.stdout
-        if result.stderr:
-            response += "\n" + result.stderr
-
-        # Show raw response for debugging
-        log_msg(f"[AI] Raw response: {response[:300]}...")
+        response = result.stdout or ""
         if result.stderr:
             response += "\n" + result.stderr
 
         response = response.replace("```json", "").replace("```", "").strip()
 
-        # Try direct parsing
         try:
             return json.loads(response)
         except json.JSONDecodeError:
             pass
 
-        # Find JSON in response - look for complete JSON object
         brace_count = 0
         json_start = -1
         for i, char in enumerate(response):
@@ -413,21 +479,14 @@ def call_claude_code(prompt: str) -> dict:
                         json_str = response[json_start:i+1]
                         return json.loads(json_str)
                     except json.JSONDecodeError:
-                        # Try next match
                         json_start = -1
                         continue
 
-        return {
-            "error": "No valid JSON found",
-            "raw_preview": response[:500] if len(response) > 500 else response
-        }
-
-    except subprocess.TimeoutExpired:
-        return {"error": "Timeout after 60 seconds"}
-    except FileNotFoundError:
-        return {"error": "Claude Code CLI not found"}
+        return {"error": "No valid JSON found", "raw_preview": response[:500]}
     except Exception as e:
-        return {"error": f"Unexpected error: {str(e)}"}
+        # If CLI fails, try API as fallback
+        log_msg(f"[AI] CLI failed: {e}, trying API...")
+        return call_ai_api(prompt)
 
 # ==================== FORMAT SLACK MESSAGE ====================
 def format_slack_message(lead: dict, qualification: dict) -> str:

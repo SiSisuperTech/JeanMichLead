@@ -1,0 +1,28 @@
+name: michlead
+regions:
+  - pars
+services:
+  - name: web
+    type: web
+    build:
+      type: dockerfile
+      dockerfile: Dockerfile
+    ports:
+      - port: 5678
+        protocol: http
+    routes:
+      - path: /
+        port: 5678
+    env:
+      - name: PORT
+        value: "5678"
+      # Set these in Koyeb dashboard:
+      # - SLACK_BOT_TOKEN
+      # - HUBSPOT_TOKEN
+      # - ANTHROPIC_API_KEY
+      # - ANTHROPIC_BASE_URL
+    instance_type: nano
+    instances: 1
+    scaling:
+      min: 1
+      max: 1
