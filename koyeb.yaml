@@ -7,6 +7,7 @@ services:
     build:
       type: dockerfile
       dockerfile: Dockerfile
+    run_command: gunicorn -b 0.0.0.0:$PORT lead_qualifier_full.py:app
     ports:
       - port: 5678
         protocol: http
@@ -20,7 +21,6 @@ services:
       # - SLACK_BOT_TOKEN
       # - HUBSPOT_TOKEN
       # - ZAI_API_KEY (your z.ai GLM Coding Plan key - enables web search!)
-      #   Get it from: https://z.ai/subscribe
     instance_type: nano
     instances: 1
     scaling:
