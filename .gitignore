@@ -1,2 +1,34 @@
+nul
+
 # Keep local version with real API keys
 qualify-final.json
+
+# Claude Code local config (has API keys) - set these in Railway instead
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+start.log
+debug_ai.log
+
+# Environment
+.env
+.venv
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Railway/Deploy local files
+ngrok.exe
+ngrok.zip
+test_output.txt
+tunnel_*.txt
+
+# Test files (optional - remove if you want them in repo)
+# test_*.py
+# *.bat
