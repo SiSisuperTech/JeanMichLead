@@ -77,35 +77,51 @@ def call_ai(prompt: str) -> dict:
         # Parse the response
         result = {
             "is_dentist": False,
-            "profile_type": "Unknown",
+            "profile_type": "SPAM",
             "score": 0,
             "qualified": False,
-            "reasoning": text
+            "reasoning": text[:500]
         }
 
         text_upper = text.upper()
 
-        # Check if dentist
-        if "YES" in text_upper[:200] and ("DENTIST" in text_upper or "CHIRURGIEN" in text_upper):
+        # Check if it's spam first (explicit mentions)
+        if " NOT A REAL DENTIST" in text_upper or " NOT DENTIST" in text_upper or "FAKE" in text_upper[:400]:
+            result["profile_type"] = "SPAM"
+            result["qualified"] = False
+            result["score"] = 0
+        # Check if dentist (look for positive indicators with context)
+        elif (" REAL DENTIST" in text_upper or " IS A DENTIST" in text_upper or "CHIRURGIEN-DENTISTE" in text_upper
+              or "CHIRURGIEN DENTIST" in text_upper):
             result["is_dentist"] = True
             result["profile_type"] = "Dentiste"
 
-        # Extract qualified
-        if "QUALIFIED: YES" in text_upper or "QUALIFIED:TRUE" in text_upper:
-            result["qualified"] = True
-        elif "QUALIFIED: NO" in text_upper or "QUALIFIED:FALSE" in text_upper:
-            result["qualified"] = False
-        else:
-            # Infer from context
-            result["qualified"] = result["is_dentist"]
+            # Check qualified status
+            if "QUALIFIED: NO" in text_upper or "QUALIFIED:NO" in text_upper:
+                result["qualified"] = False
+            else:
+                result["qualified"] = True
 
-        # Extract score
-        import re
-        score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
-        if score_match:
-            result["score"] = int(score_match.group(1))
-        elif result["is_dentist"]:
-            result["score"] = 80  # Default for found dentists
+            # Extract score
+            import re
+            score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
+            if score_match:
+                result["score"] = int(score_match.group(1))
+            else:
+                result["score"] = 90
+
+        # Fallback: check QUALIFIED: indicator at end
+        elif "QUALIFIED: YES" in text_upper or "QUALIFIED:YES" in text_upper:
+            result["qualified"] = True
+            result["is_dentist"] = True
+            result["profile_type"] = "Dentiste"
+            score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
+            result["score"] = int(score_match.group(1)) if score_match else 90
+        elif "QUALIFIED: NO" in text_upper or "QUALIFIED:NO" in text_upper:
+            result["qualified"] = False
+            result["profile_type"] = "SPAM"
+            score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
+            result["score"] = int(score_match.group(1)) if score_match else 0
 
         return result
 
