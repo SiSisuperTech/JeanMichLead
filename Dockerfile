@@ -24,5 +24,5 @@ EXPOSE 5678
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5678/health || exit 1
 
-# Run the app
-CMD ["gunicorn", "lead_qualifier_full:app", "--bind", "0.0.0.0:$PORT", "--workers", "1", "--timeout", "120"]
+# Run the app - use shell form to expand $PORT at runtime
+CMD gunicorn lead_qualifier_full:app --bind 0.0.0.0:${PORT:-5678} --workers 1 --timeout 120
