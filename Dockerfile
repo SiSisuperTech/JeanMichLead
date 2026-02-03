@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 5678
 
-CMD ["gunicorn", "-b", "0.0.0.0:${PORT}", "lead_qualifier_full.py:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:5678", "lead_qualifier_full.py:app"]
