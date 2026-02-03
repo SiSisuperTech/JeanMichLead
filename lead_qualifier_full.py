@@ -336,13 +336,23 @@ def call_ai_api(prompt: str) -> dict:
         import anthropic
 
         # Get API config from environment (Koyeb sets these)
-        api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
-        base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        # Check multiple possible env var names
+        api_key = (os.getenv("ANTHROPIC_API_KEY") or
+                   os.getenv("ANTHROPIC_AUTH_TOKEN") or
+                   os.getenv("apikey") or
+                   os.getenv("API_KEY") or
+                   "")
+        base_url = os.getenv("ANTHROPIC_BASE_URL") or os.getenv("BASE_URL", "https://api.anthropic.com")
+        model = os.getenv("ANTHROPIC_MODEL") or os.getenv("MODEL", "glm-4.7")
 
         if not api_key:
+            # Debug: log available env vars
+            env_keys = [k for k in os.environ.keys() if 'ANTHROPIC' in k.upper() or 'API' in k.upper() or 'KEY' in k.upper()]
+            log_msg(f"[AI] DEBUG Available env vars: {env_keys}")
             return {"error": "ANTHROPIC_API_KEY not set in environment"}
 
         log_msg(f"[AI] Using API: {base_url}")
+        log_msg(f"[AI] Model: {model}")
         log_msg(f"[AI] Prompt length: {len(prompt)} chars")
 
         # Initialize client with custom base URL
@@ -350,8 +360,6 @@ def call_ai_api(prompt: str) -> dict:
             api_key=api_key,
             base_url=base_url
         )
-
-        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
         log_msg(f"[AI] Calling model: {model}...")
 
