@@ -599,6 +599,49 @@ def send_dm_to_user(user_id: str, message: str) -> bool:
         log_msg(f"[SLACK] DM error: {e}")
         return False
 
+def find_user_by_name(name: str) -> str:
+    """Find a Slack user ID by their name (first.last or display name)"""
+    if not SLACK_BOT_TOKEN:
+        log_msg("[SLACK] Skipping user lookup - no token configured")
+        return None
+    try:
+        log_msg(f"[SLACK] Looking up user: {name}")
+        response = post("https://slack.com/api/users.list", headers={
+            "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+            "Content-Type": "application/json"
+        })
+
+        result = response.json()
+        if not result.get("ok"):
+            log_msg(f"[SLACK] User list failed: {result.get('error', 'unknown')}")
+            return None
+
+        # Search for user by name or display name
+        search_name = name.lower().replace(" ", ".").replace(".", "")
+        for member in result.get("members", []):
+            if not member.get("deleted", False):
+                # Check real_name (e.g., "Alan Rossato")
+                real_name = member.get("real_name", "").lower().replace(" ", "").replace(".", "")
+                # Check name (e.g., "alan.rossato")
+                username = member.get("name", "").lower().replace(".", "")
+                # Check profile display_name
+                display_name = member.get("profile", {}).get("display_name", "").lower().replace(" ", "").replace(".", "")
+
+                if (search_name in real_name or
+                    search_name in username or
+                    search_name in display_name or
+                    real_name in search_name or
+                    username in search_name):
+                    user_id = member.get("id")
+                    log_msg(f"[SLACK] Found user: {member.get('real_name')} ({user_id})")
+                    return user_id
+
+        log_msg(f"[SLACK] User '{name}' not found")
+        return None
+    except Exception as e:
+        log_msg(f"[SLACK] User lookup error: {e}")
+        return None
+
 # ==================== ROUTES ====================
 
 @app.route('/', methods=['GET'])
@@ -752,7 +795,7 @@ def slack_webhook():
                 f"*Reasoning:* {qualification.get('reasoning', '')[:200]}..."
             )
             log_msg("[SLACK] Sending DM to user...")
-            send_dm_to_user("U089Z240VD5", dm_message)  # simon.gautier
+            send_dm_to_user("U08M425UAV8", dm_message)  # alan.rossato
 
         log_activity("success", f"Qualified: {qualification.get('profile_type')} | {qualification.get('score')}/100",
                       lead['fullName'], qualification)
