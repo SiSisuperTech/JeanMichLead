@@ -1,34 +1,16 @@
 #!/usr/bin/env python3
 """
-Dental Lead Qualifier - Complete Version
-Replicates ALL functionality from qualify-final.json n8n workflow
-
-Features:
-- Slack webhook with URL verification
-- Bot/subtype filtering
-- HubSpot integration (check exists, update status)
-- Claude Code web search for dentist verification
-- Claude Code CLI with GLM
-- Slack reply with emoji status
-- Web dashboard at http://localhost:5678
+Dental Lead Qualifier - Koyeb Deployment
+Uses GLM-4.7 via z.ai API with web search
 """
 
 import os
 import re
 import json
-import subprocess
-import sys
-import tempfile
 import logging
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 from requests import post, patch
-
-# Fix Windows encoding for emojis
-if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # ==================== CONFIG ====================
 # API tokens from environment variables (Railway, local, etc.)
@@ -262,146 +244,9 @@ def update_hubspot_contact(contact_id: str, qualified: bool):
         return False
 
 # ==================== BUILD QUALIFICATION PROMPT ====================
-# ==================== WEB SEARCH ====================
-def search_web_tavily(query: str) -> str:
-    """Search using Tavily API (1000 free searches/month, excellent for AI)"""
-    tavily_key = os.getenv("TAVILY_API_KEY")
-    if not tavily_key:
-        return None
-
-    try:
-        response = post(
-            "https://api.tavily.com/search",
-            json={
-                "api_key": tavily_key,
-                "query": query,
-                "search_depth": "basic",
-                "max_results": 5,
-                "include_answer": False
-            },
-            timeout=15
-        )
-        data = response.json()
-
-        results = []
-        for result in data.get("results", [])[:5]:
-            title = result.get("title", "")
-            url = result.get("url", "")
-            content = result.get("content", "")[:200]
-            results.append(f"• {title}\n  {content}\n  {url}")
-
-        return "\n\n".join(results) if results else "No results"
-    except Exception as e:
-        return f"Tavily error: {str(e)}"
-
-def search_web_ddg(query: str) -> str:
-    """Search using DuckDuckGo HTML (free, no API key, but gets blocked)"""
-    try:
-        from bs4 import BeautifulSoup
-        import urllib.parse
-
-        encoded_query = urllib.parse.quote(query)
-        url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
-
-        response = get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }, timeout=10)
-
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        results = []
-        for result in soup.select('.result__body')[:5]:
-            title_elem = result.select_one('.result__title')
-            snippet_elem = result.select_one('.result__snippet')
-            link_elem = result.select_one('.result__url')
-
-            if title_elem:
-                title = title_elem.get_text(strip=True)
-                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-                link = link_elem.get_text(strip=True) if link_elem else ""
-                results.append(f"• {title}\n  {snippet}\n  {link}")
-
-        return "\n\n".join(results) if results else "No results found"
-    except Exception as e:
-        return f"DDG error: {str(e)}"
-
-def search_web(query: str) -> str:
-    """Search web - tries Tavily first (if key), falls back to DDG"""
-    # Try Tavily first (much better results)
-    tavily_result = search_web_tavily(query)
-    if tavily_result and not tavily_result.startswith("Tavily error"):
-        return tavily_result
-
-    # Fall back to DDG scraping
-    return search_web_ddg(query)
-
-def perform_web_searches(lead: dict) -> str:
-    """Perform real web searches and return results"""
-    name = lead.get('fullName', '')
-    email = lead.get('email', '')
-
-    if not name:
-        return "No name to search"
-
-    log_msg("[SEARCH] Starting web searches...")
-
-    # Generate search queries
-    search_queries = []
-
-    # Name + dentiste variations
-    search_queries.append(f'"{name}" dentiste')
-    search_queries.append(f'"{name}" chirurgien dentiste')
-
-    # Doctolib specific
-    search_queries.append(f'site:doctolib.fr "{name}"')
-
-    # Email search (for domain clues)
-    if email and '@' in email:
-        domain = email.split('@')[1]
-        if not domain.endswith('gmail.com') and not domain.endswith('yahoo.com') and not domain.endswith('hotmail.com'):
-            search_queries.append(f'site:{domain} dentist')
-
-    # Perform searches (limit to 3 for speed)
-    all_results = []
-    for i, query in enumerate(search_queries[:3]):
-        log_msg(f"[SEARCH] Query {i+1}: {query[:50]}...")
-        results = search_web(query)
-        all_results.append(f"=== Search: {query} ===\n{results}")
-
-    log_msg(f"[SEARCH] Completed {len(search_queries[:3])} searches")
-
-    return "\n\n".join(all_results)
-
-def build_qualification_prompt(lead: dict, search_results: str = None) -> str:
-    """Build AI prompt for GLM-4.7 - ASCII only for compatibility"""
-
-    email_domain = lead.get('email', '').split('@')[-1] if '@' in lead.get('email', '') else 'Unknown'
-
-    # Build search queries - more variations for better results
-    search_queries = []
-    full_name = lead.get('fullName', '')
-    if full_name:
-        # Try different name variations
-        name_variants = [
-            full_name,
-            full_name.replace('Dr ', '').replace('Dr. ', '').replace('Pr ', '').replace('Pr. ', '').strip(),
-        ]
-        # Also split name for searches
-        parts = full_name.split()
-        if len(parts) >= 2:
-            name_variants.append(f'{" ".join(parts[1:])}')  # Last name only
-
-        for name_variant in name_variants[:2]:  # Limit to avoid too many searches
-            search_queries.extend([
-                f'site:fr "{name_variant}" dentiste',
-                f'site:fr "{name_variant}" chirurgien dentiste',
-                f'site:doctolib.fr "{name_variant}"',
-                f'"{name_variant}" dentiste France'
-            ])
-
-    queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(search_queries[:6])])
-
-    return f"""You are a dental lead qualification analyst for France. You MUST perform THOROUGH web searches.
+def build_qualification_prompt(lead: dict) -> str:
+    """Build AI prompt for GLM-4.7 with web_search tool"""
+    return f"""You are a dental lead qualification analyst for France. You have access to web search - use it to verify leads.
 
 LEAD TO VERIFY:
 Name: {lead.get('fullName', 'Unknown')}
@@ -410,131 +255,37 @@ Phone: {lead.get('phone', 'Unknown')}
 Country: {lead.get('country', 'Unknown')}
 
 CRITICAL INSTRUCTIONS:
-1. You MUST search MULTIPLE sources before concluding SPAM
-2. Web search can be flaky - try different search variations
-3. If first search finds nothing, try: name only, name + "chirurgien dentiste", name + "doctolib"
-4. Check: Doctolib.fr, annuaire.sante.fr, Google (general search), LinkedIn
-5. A Gmail address does NOT automatically mean SPAM - many French dentists use Gmail
-
-SEARCH QUERIES TO TRY (in order):
-{queries_text}
+1. Use your web_search tool to verify this lead
+2. Search: name + "dentiste", name + "chirurgien dentiste", name + "doctolib"
+3. Check: Doctolib.fr, annuaire.sante.fr, Google, LinkedIn
+4. A Gmail address does NOT automatically mean SPAM - many dentists use Gmail
 
 SCORING (0-100):
 +50: Found on Doctolib.fr or annuaire.sante.fr as dentist
 +30: Email has dental domain (cabinet*.fr, *dentaire.fr, clinique*.fr)
 +20: Professional email (not gmail/yahoo/hotmail)
 +10: Complete info (name+email+phone)
--20: Gmail address (ONLY if no web verification found)
+-20: Gmail (ONLY if no web verification found)
 
 QUALIFICATION:
 Score >= 70: QUALIFIED
-Score 50-69: POSSIBLE
-Score < 50: NOT QUALIFIED
+Score < 70: NOT QUALIFIED
 
 ONLY classify as SPAM if:
-- No web presence found AFTER THOROUGH SEARCHING
+- No web presence found AFTER searching
 - Name appears nowhere as dentist
-- No dental indicators at all
 
 Return ONLY JSON:
 {{"is_dentist": true/false, "profile_type": "Dentiste/Orthodontiste/Etudiant/Autre/SPAM", "score": 75, "qualified": true/false, "reasoning": "What you found and where"}}"""
 
-# ==================== CALL AI API (Direct HTTP) ====================
-def call_ai_api(prompt: str) -> dict:
-    """Call Anthropic-compatible API directly (works on Koyeb)"""
-    try:
-        import anthropic
-
-        # Get API config from environment (Koyeb sets these)
-        # Check multiple possible env var names
-        api_key = (os.getenv("ANTHROPIC_API_KEY") or
-                   os.getenv("ANTHROPIC_AUTH_TOKEN") or
-                   os.getenv("apikey") or
-                   os.getenv("API_KEY") or
-                   "")
-        base_url = os.getenv("ANTHROPIC_BASE_URL") or os.getenv("BASE_URL", "https://api.anthropic.com")
-        model = os.getenv("ANTHROPIC_MODEL") or os.getenv("MODEL", "glm-4.7")
-
-        if not api_key:
-            # Debug: log available env vars
-            env_keys = [k for k in os.environ.keys() if 'ANTHROPIC' in k.upper() or 'API' in k.upper() or 'KEY' in k.upper()]
-            log_msg(f"[AI] DEBUG Available env vars: {env_keys}")
-            return {"error": "ANTHROPIC_API_KEY not set in environment"}
-
-        log_msg(f"[AI] Using API: {base_url}")
-        log_msg(f"[AI] Model: {model}")
-        log_msg(f"[AI] Prompt length: {len(prompt)} chars")
-
-        # Initialize client with custom base URL
-        client = anthropic.Anthropic(
-            api_key=api_key,
-            base_url=base_url
-        )
-
-        log_msg(f"[AI] Calling model: {model}...")
-
-        response = client.messages.create(
-            model=model,
-            max_tokens=2000,
-            temperature=0,
-            messages=[{
-                "role": "user",
-                "content": prompt
-            }]
-        )
-
-        # Extract the response text
-        response_text = response.content[0].text
-        log_msg(f"[AI] Response received: {len(response_text)} chars")
-
-        # Clean up markdown code blocks
-        response_text = response_text.replace("```json", "").replace("```", "").strip()
-
-        # Parse JSON
-        try:
-            result = json.loads(response_text)
-            log_msg(f"[AI] Parsed successfully: {result.get('profile_type', '?')} | Score: {result.get('score', 0)}")
-            return result
-        except json.JSONDecodeError:
-            # Try to find JSON in response
-            brace_count = 0
-            json_start = -1
-            for i, char in enumerate(response_text):
-                if char == '{':
-                    if brace_count == 0:
-                        json_start = i
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0 and json_start >= 0:
-                        try:
-                            json_str = response_text[json_start:i+1]
-                            result = json.loads(json_str)
-                            log_msg(f"[AI] Parsed with extraction: {result.get('profile_type', '?')}")
-                            return result
-                        except json.JSONDecodeError:
-                            json_start = -1
-                            continue
-
-            return {
-                "error": "No valid JSON in response",
-                "raw_preview": response_text[:500] if len(response_text) > 500 else response_text
-            }
-
-    except ImportError:
-        return {"error": "anthropic package not installed - run: pip install anthropic"}
-    except Exception as e:
-        return {"error": f"API call failed: {str(e)}"}
-
 # ==================== CALL Z.AI API WITH WEB SEARCH ====================
-def call_zai_web_search(prompt: str) -> dict:
-    """Call Z.ai Coding Plan endpoint with native web_search tool"""
+def call_ai(prompt: str) -> dict:
+    """Call Z.ai GLM-4.7 with web_search tool"""
     try:
         api_key = os.getenv("ZAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
             return {"error": "ZAI_API_KEY not set in environment"}
 
-        # Coding Plan endpoint that supports web search!
         url = "https://api.z.ai/api/coding/paas/v4/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -549,35 +300,34 @@ def call_zai_web_search(prompt: str) -> dict:
                 "web_search": {
                     "enable": True,
                     "search_result": True,
-                    "count": 5,
-                    "content_size": "high"
+                    "count": 5
                 }
             }],
             "max_tokens": 2000,
             "temperature": 0
         }
 
-        log_msg("[Z.AI] Calling Coding Plan endpoint with web_search...")
+        log_msg("[AI] Calling GLM-4.7 with web_search...")
 
         response = post(url, headers=headers, json=payload, timeout=60)
 
         if response.status_code != 200:
-            return {"error": f"Z.ai API returned {response.status_code}: {response.text[:200]}"}
+            return {"error": f"API returned {response.status_code}: {response.text[:200]}"}
 
         data = response.json()
         text = data["choices"][0]["message"]["content"].strip()
-        log_msg(f"[Z.AI] Response received: {len(text)} chars")
+        log_msg(f"[AI] Response: {len(text)} chars")
 
-        # Clean up markdown code blocks
+        # Clean up markdown
         text = text.replace("```json", "").replace("```", "").strip()
 
         # Parse JSON
         try:
             result = json.loads(text)
-            log_msg(f"[Z.AI] Parsed: {result.get('profile_type', '?')} | Score: {result.get('score', 0)}")
+            log_msg(f"[AI] {result.get('profile_type', '?')} | Score: {result.get('score', 0)}")
             return result
         except json.JSONDecodeError:
-            # Fallback extraction - handle truncated responses
+            # Extract JSON from response
             brace_count = 0
             start = -1
             for i, ch in enumerate(text):
@@ -590,9 +340,7 @@ def call_zai_web_search(prompt: str) -> dict:
                     if brace_count == 0 and start >= 0:
                         try:
                             json_str = text[start:i+1]
-                            # Fix truncated strings (unclosed quotes)
                             if json_str.count('"') % 2 != 0:
-                                # Add closing quote if needed
                                 json_str += '"'
                             return json.loads(json_str)
                         except json.JSONDecodeError:
@@ -600,97 +348,7 @@ def call_zai_web_search(prompt: str) -> dict:
             return {"error": "No valid JSON in response", "raw_preview": text[:500]}
 
     except Exception as e:
-        return {"error": f"Z.ai API call failed: {str(e)}"}
-
-# Fallback to Claude CLI for local development
-def call_claude_code(prompt: str) -> dict:
-    """Try Z.ai web search first, then API, fallback to CLI for local development"""
-    # Priority 1: Z.ai with web search (if ZAI_API_KEY is set)
-    if os.getenv("ZAI_API_KEY"):
-        log_msg("[AI] Using Z.ai with web_search")
-        return call_zai_web_search(prompt)
-
-    # Priority 2: Direct API (production mode on Koyeb)
-    if os.getenv("KOYEB") or os.getenv("ANTHROPIC_API_KEY"):
-        log_msg("[AI] Using direct API (production mode)")
-        return call_ai_api(prompt)
-
-    # Otherwise try CLI for local development
-    try:
-        env = os.environ.copy()
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        config_dir = os.path.join(script_dir, ".claude")
-        config_path = os.path.join(config_dir, "config.json")
-
-        env["CLAUDE_CONFIG_DIR"] = config_dir
-        env["PYTHONIOENCODING"] = "utf-8"
-
-        api_key = ""
-        try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-                api_key = config.get("env", {}).get("ANTHROPIC_AUTH_TOKEN", "")
-                base_url = config.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-                if api_key:
-                    env["ANTHROPIC_AUTH_TOKEN"] = api_key
-                if base_url:
-                    env["ANTHROPIC_BASE_URL"] = base_url
-        except Exception:
-            pass
-
-        startupinfo = None
-        if sys.platform == "win32":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
-        log_msg(f"[AI] Using Claude CLI (local mode)...")
-
-        result = subprocess.run(
-            'claude --dangerously-skip-permissions',
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=90,
-            shell=True,
-            env=env,
-            startupinfo=startupinfo
-        )
-
-        response = result.stdout or ""
-        if result.stderr:
-            response += "\n" + result.stderr
-
-        response = response.replace("```json", "").replace("```", "").strip()
-
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            pass
-
-        brace_count = 0
-        json_start = -1
-        for i, char in enumerate(response):
-            if char == '{':
-                if brace_count == 0:
-                    json_start = i
-                brace_count += 1
-            elif char == '}':
-                brace_count -= 1
-                if brace_count == 0 and json_start >= 0:
-                    try:
-                        json_str = response[json_start:i+1]
-                        return json.loads(json_str)
-                    except json.JSONDecodeError:
-                        json_start = -1
-                        continue
-
-        return {"error": "No valid JSON found", "raw_preview": response[:500]}
-    except Exception as e:
-        # If CLI fails, try API as fallback
-        log_msg(f"[AI] CLI failed: {e}, trying API...")
-        return call_ai_api(prompt)
+        return {"error": f"API call failed: {str(e)}"}
 
 # ==================== FORMAT SLACK MESSAGE ====================
 def format_slack_message(lead: dict, qualification: dict) -> str:
@@ -940,9 +598,9 @@ def slack_webhook():
             log_msg("[HUBSPOT] New lead")
 
         # AI qualification
-        log_msg("[AI] Starting analysis (this takes 30-60s)...")
+        log_msg("[AI] Starting analysis...")
         prompt = build_qualification_prompt(lead)
-        qualification = call_claude_code(prompt)
+        qualification = call_ai(prompt)
 
         log_msg("[AI] Result:")
         log_msg(f"  - Profile: {qualification.get('profile_type', '?')}")

@@ -2,27 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Claude Code CLI (for compatibility)
-# RUN curl -fsSL https://claude.ai/install.sh | sh
-
-# Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
-COPY lead_qualifier_full.py .
+COPY . .
 
-# Expose port
 EXPOSE 5678
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5678/health || exit 1
-
-# Run the app - use shell form to expand $PORT at runtime
-CMD gunicorn lead_qualifier_full:app --bind 0.0.0.0:${PORT:-5678} --workers 1 --timeout 120
+CMD ["gunicorn", "-b", "0.0.0.0:5678", "lead_qualifier_full.py:app"]
