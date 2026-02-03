@@ -25,47 +25,10 @@ MOCK_LEAD = {
 def build_prompt(lead: dict) -> str:
     """Build AI prompt for GLM-4.7 with web_search tool"""
     postal = lead.get('postalCode', '')
-    location_hint = f"Postal code: {postal}" if postal else ""
+    name = lead.get('fullName', '')
 
-    return f"""You are a dental lead qualification analyst for France. You have access to web search - use it to verify leads.
-
-LEAD TO VERIFY:
-Name: {lead.get('fullName', 'Unknown')}
-Email: {lead.get('email', 'Unknown')}
-Phone: {lead.get('phone', 'Unknown')}
-Country: {lead.get('country', 'Unknown')}
-{location_hint}
-
-CRITICAL INSTRUCTIONS - SEARCH THOROUGHLY:
-1. You MUST search MULTIPLE times before concluding SPAM
-2. ALWAYS include the postal code/city in your searches if provided
-3. Search variations to try:
-   - "{lead.get('fullName', '')}" + "dentiste"
-   - "{lead.get('fullName', '')}" + "chirurgien dentiste"
-   - "{lead.get('fullName', '')}" + postal (if provided)
-   - site:doctolib.fr "{lead.get('fullName', '')}"
-   - site:annuaire.sante.fr "{lead.get('fullName', '')}"
-4. Check: Doctolib.fr, annuaire.sante.fr, PagesJaunes, Google
-5. Orange.fr, Gmail, etc. do NOT mean SPAM - many French dentists use these
-
-SCORING (0-100):
-+60: Found on Doctolib.fr or annuaire.sante.fr as dentist
-+40: Found on PagesJaunes or other directories as dentist
-+20: Professional email domain (cabinet*.fr, *dentaire.fr)
-+10: Complete info (name+email+phone)
--10: Personal email (orange.fr, gmail, hotmail) - ONLY if no web verification found
-
-QUALIFICATION:
-Score >= 70: QUALIFIED
-Score < 70: NOT QUALIFIED
-
-ONLY classify as SPAM if:
-- You searched THOROUGHLY with multiple variations
-- No web presence found anywhere
-- Name appears nowhere as dentist
-
-Return ONLY JSON:
-{{"is_dentist": true/false, "profile_type": "Dentiste/Orthodontiste/Etudiant/Autre/SPAM", "score": 75, "qualified": true/false, "reasoning": "What you searched and where"}}"""
+    # Simple direct query that worked
+    return f'Is "{name} dentiste {postal}" a real dentist? Search and give me the address, phone, and sources where you found this information. End with: QUALIFIED: yes/no and SCORE: X/100'
 
 def call_ai(prompt: str) -> dict:
     """Call Z.ai GLM-4.7 with web_search tool"""
@@ -109,34 +72,42 @@ def call_ai(prompt: str) -> dict:
 
         text = data["choices"][0]["message"]["content"].strip()
         print(f"[AI] Response: {len(text)} chars")
+        print(f"\n[Full Response]:\n{text}\n")
 
-        # Clean up markdown
-        text = text.replace("```json", "").replace("```", "").strip()
+        # Parse the response
+        result = {
+            "is_dentist": False,
+            "profile_type": "Unknown",
+            "score": 0,
+            "qualified": False,
+            "reasoning": text
+        }
 
-        # Parse JSON
-        try:
-            result = json.loads(text)
-            return result
-        except json.JSONDecodeError:
-            # Extract JSON from response
-            brace_count = 0
-            start = -1
-            for i, ch in enumerate(text):
-                if ch == "{":
-                    if brace_count == 0:
-                        start = i
-                    brace_count += 1
-                elif ch == "}":
-                    brace_count -= 1
-                    if brace_count == 0 and start >= 0:
-                        try:
-                            json_str = text[start:i+1]
-                            if json_str.count('"') % 2 != 0:
-                                json_str += '"'
-                            return json.loads(json_str)
-                        except json.JSONDecodeError:
-                            start = -1
-            return {"error": "No valid JSON in response", "raw_preview": text[:500]}
+        text_upper = text.upper()
+
+        # Check if dentist
+        if "YES" in text_upper[:200] and ("DENTIST" in text_upper or "CHIRURGIEN" in text_upper):
+            result["is_dentist"] = True
+            result["profile_type"] = "Dentiste"
+
+        # Extract qualified
+        if "QUALIFIED: YES" in text_upper or "QUALIFIED:TRUE" in text_upper:
+            result["qualified"] = True
+        elif "QUALIFIED: NO" in text_upper or "QUALIFIED:FALSE" in text_upper:
+            result["qualified"] = False
+        else:
+            # Infer from context
+            result["qualified"] = result["is_dentist"]
+
+        # Extract score
+        import re
+        score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
+        if score_match:
+            result["score"] = int(score_match.group(1))
+        elif result["is_dentist"]:
+            result["score"] = 80  # Default for found dentists
+
+        return result
 
     except Exception as e:
         return {"error": f"API call failed: {str(e)}"}
