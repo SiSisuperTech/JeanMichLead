@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["gunicorn", "-b", "0.0.0.0:8000", "lead_qualifier_full:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "--timeout", "120", "lead_qualifier_full:app"]
