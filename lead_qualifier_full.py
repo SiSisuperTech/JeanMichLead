@@ -277,20 +277,34 @@ def call_ai(prompt: str) -> dict:
                     "count": 5
                 }
             }],
-            "max_tokens": 4000,
+            "max_tokens": 8000,
             "temperature": 0
         }
 
+        log_msg(f"[AI] API: {url}")
+        log_msg(f"[AI] Key: {api_key[:20]}..." if api_key else "[AI] No key!")
         log_msg("[AI] Calling GLM-4.7 with web_search...")
 
         response = post(url, headers=headers, json=payload, timeout=120)
 
         if response.status_code != 200:
+            log_msg(f"[AI] HTTP {response.status_code}: {response.text[:300]}")
             return {"error": f"API returned {response.status_code}: {response.text[:200]}"}
 
         data = response.json()
-        text = data["choices"][0]["message"]["content"].strip()
+        log_msg(f"[AI] Raw response keys: {list(data.keys())}")
+
+        if "choices" not in data or not data["choices"]:
+            log_msg(f"[AI] No choices in response: {str(data)[:300]}")
+            return {"error": "No choices in response", "raw": data}
+
+        content = data["choices"][0]["message"].get("content", "")
+        text = content.strip()
         log_msg(f"[AI] Response: {len(text)} chars")
+
+        if not text:
+            log_msg(f"[AI] EMPTY RESPONSE! Full message: {data['choices'][0]['message']}")
+            return {"error": "Empty response from AI", "raw_message": data["choices"][0]["message"]}
 
         # Parse natural language response
         result = {
