@@ -36,12 +36,11 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 HUBSPOT_TOKEN = os.getenv("HUBSPOT_TOKEN")
 PORT = int(os.getenv("PORT", 5678))
 
-# Require API tokens
-if not SLACK_BOT_TOKEN or not HUBSPOT_TOKEN:
-    print("ERROR: Missing API tokens!")
-    print("Set SLACK_BOT_TOKEN and HUBSPOT_TOKEN environment variables.")
-    import sys
-    sys.exit(1)
+# Warn if tokens missing (but don't exit - allows partial functionality)
+if not SLACK_BOT_TOKEN:
+    print("WARNING: SLACK_BOT_TOKEN not set - Slack features will be disabled")
+if not HUBSPOT_TOKEN:
+    print("WARNING: HUBSPOT_TOKEN not set - HubSpot features will be disabled")
 
 app = Flask(__name__)
 
@@ -170,6 +169,9 @@ def extract_lead_data(message: str) -> dict:
 # ==================== HUBSPOT INTEGRATION ====================
 def check_hubspot_contact(email: str) -> dict:
     """Check if contact exists in HubSpot"""
+    if not HUBSPOT_TOKEN:
+        log_msg("[HUBSPOT] Skipping - no token configured")
+        return {"exists": False, "contact_id": None, "skipped": True}
     try:
         response = post(
             "https://api.hubapi.com/crm/v3/objects/contacts/search",
@@ -208,6 +210,9 @@ def check_hubspot_contact(email: str) -> dict:
 
 def update_hubspot_contact(contact_id: str, qualified: bool):
     """Update HubSpot contact status"""
+    if not HUBSPOT_TOKEN:
+        log_msg("[HUBSPOT] Skipping update - no token configured")
+        return False
     try:
         log_msg(f"[HUBSPOT] Updating contact {contact_id} -> {'Qualified' if qualified else 'UNQUALIFIED'}")
         if qualified:
@@ -507,6 +512,9 @@ def format_slack_message(lead: dict, qualification: dict) -> str:
 # ==================== SEND SLACK REPLY ====================
 def send_slack_reply(channel: str, message: str) -> bool:
     """Send reply to Slack"""
+    if not SLACK_BOT_TOKEN:
+        log_msg("[SLACK] Skipping - no token configured")
+        return False
     try:
         post("https://slack.com/api/chat.postMessage", headers={
             "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
@@ -522,6 +530,9 @@ def send_slack_reply(channel: str, message: str) -> bool:
 
 def add_reaction_to_message(channel: str, timestamp: str, emoji: str) -> bool:
     """Add emoji reaction to a message"""
+    if not SLACK_BOT_TOKEN:
+        log_msg("[SLACK] Skipping reaction - no token configured")
+        return False
     try:
         response = post("https://slack.com/api/reactions.add", headers={
             "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
@@ -543,6 +554,9 @@ def add_reaction_to_message(channel: str, timestamp: str, emoji: str) -> bool:
 
 def send_dm_to_user(user_id: str, message: str) -> bool:
     """Send a DM to a specific user"""
+    if not SLACK_BOT_TOKEN:
+        log_msg("[SLACK] Skipping DM - no token configured")
+        return False
     try:
         # Open a DM channel with the user
         response = post("https://slack.com/api/conversations.open", headers={
