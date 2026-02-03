@@ -262,8 +262,118 @@ def update_hubspot_contact(contact_id: str, qualified: bool):
         return False
 
 # ==================== BUILD QUALIFICATION PROMPT ====================
-def build_qualification_prompt(lead: dict) -> str:
-    """Build AI prompt for GLM-4.7 with web search - ASCII only for compatibility"""
+# ==================== WEB SEARCH ====================
+def search_web_tavily(query: str) -> str:
+    """Search using Tavily API (1000 free searches/month, excellent for AI)"""
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    if not tavily_key:
+        return None
+
+    try:
+        response = post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": tavily_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 5,
+                "include_answer": False
+            },
+            timeout=15
+        )
+        data = response.json()
+
+        results = []
+        for result in data.get("results", [])[:5]:
+            title = result.get("title", "")
+            url = result.get("url", "")
+            content = result.get("content", "")[:200]
+            results.append(f"• {title}\n  {content}\n  {url}")
+
+        return "\n\n".join(results) if results else "No results"
+    except Exception as e:
+        return f"Tavily error: {str(e)}"
+
+def search_web_ddg(query: str) -> str:
+    """Search using DuckDuckGo HTML (free, no API key, but gets blocked)"""
+    try:
+        from bs4 import BeautifulSoup
+        import urllib.parse
+
+        encoded_query = urllib.parse.quote(query)
+        url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+
+        response = get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }, timeout=10)
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        results = []
+        for result in soup.select('.result__body')[:5]:
+            title_elem = result.select_one('.result__title')
+            snippet_elem = result.select_one('.result__snippet')
+            link_elem = result.select_one('.result__url')
+
+            if title_elem:
+                title = title_elem.get_text(strip=True)
+                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
+                link = link_elem.get_text(strip=True) if link_elem else ""
+                results.append(f"• {title}\n  {snippet}\n  {link}")
+
+        return "\n\n".join(results) if results else "No results found"
+    except Exception as e:
+        return f"DDG error: {str(e)}"
+
+def search_web(query: str) -> str:
+    """Search web - tries Tavily first (if key), falls back to DDG"""
+    # Try Tavily first (much better results)
+    tavily_result = search_web_tavily(query)
+    if tavily_result and not tavily_result.startswith("Tavily error"):
+        return tavily_result
+
+    # Fall back to DDG scraping
+    return search_web_ddg(query)
+
+def perform_web_searches(lead: dict) -> str:
+    """Perform real web searches and return results"""
+    name = lead.get('fullName', '')
+    email = lead.get('email', '')
+
+    if not name:
+        return "No name to search"
+
+    log_msg("[SEARCH] Starting web searches...")
+
+    # Generate search queries
+    search_queries = []
+
+    # Name + dentiste variations
+    search_queries.append(f'"{name}" dentiste')
+    search_queries.append(f'"{name}" chirurgien dentiste')
+
+    # Doctolib specific
+    search_queries.append(f'site:doctolib.fr "{name}"')
+
+    # Email search (for domain clues)
+    if email and '@' in email:
+        domain = email.split('@')[1]
+        if not domain.endswith('gmail.com') and not domain.endswith('yahoo.com') and not domain.endswith('hotmail.com'):
+            search_queries.append(f'site:{domain} dentist')
+
+    # Perform searches (limit to 3 for speed)
+    all_results = []
+    for i, query in enumerate(search_queries[:3]):
+        log_msg(f"[SEARCH] Query {i+1}: {query[:50]}...")
+        results = search_web(query)
+        all_results.append(f"=== Search: {query} ===\n{results}")
+
+    log_msg(f"[SEARCH] Completed {len(search_queries[:3])} searches")
+
+    return "\n\n".join(all_results)
+
+def build_qualification_prompt(lead: dict, search_results: str = None) -> str:
+    """Build AI prompt for GLM-4.7 - ASCII only for compatibility"""
 
     email_domain = lead.get('email', '').split('@')[-1] if '@' in lead.get('email', '') else 'Unknown'
 
@@ -416,10 +526,91 @@ def call_ai_api(prompt: str) -> dict:
     except Exception as e:
         return {"error": f"API call failed: {str(e)}"}
 
+# ==================== CALL Z.AI API WITH WEB SEARCH ====================
+def call_zai_web_search(prompt: str) -> dict:
+    """Call Z.ai Coding Plan endpoint with native web_search tool"""
+    try:
+        api_key = os.getenv("ZAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return {"error": "ZAI_API_KEY not set in environment"}
+
+        # Coding Plan endpoint that supports web search!
+        url = "https://api.z.ai/api/coding/paas/v4/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": "glm-4.7",
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": [{
+                "type": "web_search",
+                "web_search": {
+                    "enable": True,
+                    "search_result": True,
+                    "count": 5,
+                    "content_size": "high"
+                }
+            }],
+            "max_tokens": 2000,
+            "temperature": 0
+        }
+
+        log_msg("[Z.AI] Calling Coding Plan endpoint with web_search...")
+
+        response = post(url, headers=headers, json=payload, timeout=60)
+
+        if response.status_code != 200:
+            return {"error": f"Z.ai API returned {response.status_code}: {response.text[:200]}"}
+
+        data = response.json()
+        text = data["choices"][0]["message"]["content"].strip()
+        log_msg(f"[Z.AI] Response received: {len(text)} chars")
+
+        # Clean up markdown code blocks
+        text = text.replace("```json", "").replace("```", "").strip()
+
+        # Parse JSON
+        try:
+            result = json.loads(text)
+            log_msg(f"[Z.AI] Parsed: {result.get('profile_type', '?')} | Score: {result.get('score', 0)}")
+            return result
+        except json.JSONDecodeError:
+            # Fallback extraction - handle truncated responses
+            brace_count = 0
+            start = -1
+            for i, ch in enumerate(text):
+                if ch == "{":
+                    if brace_count == 0:
+                        start = i
+                    brace_count += 1
+                elif ch == "}":
+                    brace_count -= 1
+                    if brace_count == 0 and start >= 0:
+                        try:
+                            json_str = text[start:i+1]
+                            # Fix truncated strings (unclosed quotes)
+                            if json_str.count('"') % 2 != 0:
+                                # Add closing quote if needed
+                                json_str += '"'
+                            return json.loads(json_str)
+                        except json.JSONDecodeError:
+                            start = -1
+            return {"error": "No valid JSON in response", "raw_preview": text[:500]}
+
+    except Exception as e:
+        return {"error": f"Z.ai API call failed: {str(e)}"}
+
 # Fallback to Claude CLI for local development
 def call_claude_code(prompt: str) -> dict:
-    """Try API first, fallback to CLI for local development"""
-    # If running in production (Koyeb), use API
+    """Try Z.ai web search first, then API, fallback to CLI for local development"""
+    # Priority 1: Z.ai with web search (if ZAI_API_KEY is set)
+    if os.getenv("ZAI_API_KEY"):
+        log_msg("[AI] Using Z.ai with web_search")
+        return call_zai_web_search(prompt)
+
+    # Priority 2: Direct API (production mode on Koyeb)
     if os.getenv("KOYEB") or os.getenv("ANTHROPIC_API_KEY"):
         log_msg("[AI] Using direct API (production mode)")
         return call_ai_api(prompt)

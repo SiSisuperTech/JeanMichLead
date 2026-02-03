@@ -19,8 +19,8 @@ services:
       # Set these in Koyeb dashboard:
       # - SLACK_BOT_TOKEN
       # - HUBSPOT_TOKEN
-      # - ANTHROPIC_API_KEY
-      # - ANTHROPIC_BASE_URL
+      # - ZAI_API_KEY (your z.ai GLM Coding Plan key - enables web search!)
+      #   Get it from: https://z.ai/subscribe
     instance_type: nano
     instances: 1
     scaling:
