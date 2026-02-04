@@ -18,11 +18,25 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 HUBSPOT_TOKEN = os.getenv("HUBSPOT_TOKEN")
 PORT = int(os.getenv("PORT", 8000))
 
+# Filter: Only process messages from specific channels (comma-separated channel IDs)
+# Example: C1234567890,C0987654321
+# Leave empty to process messages from any channel
+ALLOWED_CHANNELS = os.getenv("SLACK_ALLOWED_CHANNELS", "").split(",") if os.getenv("SLACK_ALLOWED_CHANNELS") else []
+
+# HubSpot detection - only process HubSpot bot messages
+# Can override by setting to specific HubSpot bot_id or app_id
+HUBSPOT_BOT_ID = os.getenv("HUBSPOT_BOT_ID", "")  # e.g., B1234567890
+HUBSPOT_APP_ID = os.getenv("HUBSPOT_APP_ID", "")  # e.g., A0T8HPHHK
+
 # Warn if tokens missing (but don't exit - allows partial functionality)
 if not SLACK_BOT_TOKEN:
     print("WARNING: SLACK_BOT_TOKEN not set - Slack features will be disabled")
 if not HUBSPOT_TOKEN:
     print("WARNING: HUBSPOT_TOKEN not set - HubSpot features will be disabled")
+
+print("CONFIG: Only processing messages from HubSpot app/bot")
+if ALLOWED_CHANNELS:
+    print(f"CONFIG: Only in channels: {ALLOWED_CHANNELS}")
 
 app = Flask(__name__)
 
@@ -276,7 +290,6 @@ def get_engagement_history(contact_id: str) -> dict:
                 props = note.get("properties", {})
                 body = props.get("hs_note_body", "")
                 # Clean HTML from note body
-                import re
                 body = re.sub(r'<[^>]+>', '', body).strip()
                 if body:
                     history["notes"].append({
@@ -489,7 +502,6 @@ def call_ai(prompt: str) -> dict:
                 result["qualified"] = True
 
             # Extract score
-            import re
             score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
             if score_match:
                 result["score"] = int(score_match.group(1))
@@ -704,18 +716,50 @@ def slack_webhook():
         event = data.get("event", {})
         log_msg(f"[WEBHOOK] Event type: {event.get('type')}")
 
-        # Skip bots and subtypes (including message_changed, message_deleted, etc.)
-        if event.get("bot_id") or event.get("subtype"):
-            log_msg("[WEBHOOK] Skipping bot/subtype message")
-            return jsonify({"status": "ok"})
-
         # Only process messages
         if event.get("type") != "message":
             log_msg(f"[WEBHOOK] Skipping non-message event: {event.get('type')}")
             return jsonify({"status": "ok"})
 
-        message = event.get("text", "")
+        # IMPORTANT: Only process HubSpot bot messages, skip regular users and other bots
+        bot_id = event.get("bot_id", "")
+        app_id = event.get("app_id", "")
+        user_id = event.get("user", "")
+        username = event.get("username", "")
+        subtype = event.get("subtype", "")
+
+        # Skip subtypes like message_changed, message_deleted
+        if subtype:
+            log_msg(f"[WEBHOOK] Skipping subtype: {subtype}")
+            return jsonify({"status": "ok"})
+
+        # Check if this is a HubSpot message
+        is_hubspot = (
+            # Check by bot_id (if configured)
+            (HUBSPOT_BOT_ID and bot_id == HUBSPOT_BOT_ID) or
+            # Check by app_id (if configured)
+            (HUBSPOT_APP_ID and app_id == HUBSPOT_APP_ID) or
+            # Check by username (HubSpot messages have "HubSpot" in username)
+            (username and "hubspot" in username.lower())
+        )
+
+        # If it's a regular user message (not from HubSpot), skip
+        if user_id and not bot_id:
+            log_msg(f"[WEBHOOK] Skipping user message (not HubSpot)")
+            return jsonify({"status": "skipped", "reason": "not_hubspot"})
+
+        # If it's a bot but not HubSpot, skip
+        if bot_id and not is_hubspot:
+            log_msg(f"[WEBHOOK] Skipping non-HubSpot bot: {bot_id}")
+            return jsonify({"status": "skipped", "reason": "not_hubspot_bot"})
+
+        # Filter by channel (if configured)
         channel = event.get("channel", "")
+        if ALLOWED_CHANNELS and channel not in ALLOWED_CHANNELS:
+            log_msg(f"[WEBHOOK] Skipping - channel {channel} not in allowed list")
+            return jsonify({"status": "skipped", "reason": "channel_not_allowed"})
+
+        message = event.get("text", "")
         ts = event.get("ts", "")
 
         if not message or not channel:
