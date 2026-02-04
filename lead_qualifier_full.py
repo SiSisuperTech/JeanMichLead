@@ -23,11 +23,15 @@ PORT = int(os.getenv("PORT", 8000))
 # Leave empty to process messages from any channel
 ALLOWED_CHANNELS = os.getenv("SLACK_ALLOWED_CHANNELS", "").split(",") if os.getenv("SLACK_ALLOWED_CHANNELS") else []
 
-# HubSpot detection - only process HubSpot bot messages
-# Can override by setting to specific HubSpot bot_id, app_id, or user_id
-HUBSPOT_BOT_ID = os.getenv("HUBSPOT_BOT_ID", "")  # e.g., B1234567890
-HUBSPOT_APP_ID = os.getenv("HUBSPOT_APP_ID", "")  # e.g., A0T8HPHHK
-HUBSPOT_USER_ID = os.getenv("HUBSPOT_USER_ID", "")  # HubSpot integration user ID (e.g., U07Q...)
+# Only process messages that match lead notification patterns
+# Messages must contain phrases like "booked a demo" or "new lead"
+LEAD_PATTERNS = [
+    r"booked a demo",
+    r"new lead",
+    r"a new lead",
+    r"lead has booked",
+    r"lead arrived"
+]
 
 # Warn if tokens missing (but don't exit - allows partial functionality)
 if not SLACK_BOT_TOKEN:
@@ -35,7 +39,7 @@ if not SLACK_BOT_TOKEN:
 if not HUBSPOT_TOKEN:
     print("WARNING: HUBSPOT_TOKEN not set - HubSpot features will be disabled")
 
-print("CONFIG: Only processing messages from HubSpot app/bot")
+print(f"CONFIG: Only processing lead notification messages (containing: {', '.join(LEAD_PATTERNS)})")
 if ALLOWED_CHANNELS:
     print(f"CONFIG: Only in channels: {ALLOWED_CHANNELS}")
 
@@ -769,39 +773,34 @@ def slack_webhook():
             log_msg(f"[WEBHOOK] Skipping non-message event: {event.get('type')}")
             return jsonify({"status": "ok"})
 
-        # IMPORTANT: Only process HubSpot messages, skip regular users and other bots
-        bot_id = event.get("bot_id", "")
-        app_id = event.get("app_id", "")
-        user_id = event.get("user", "")
-        username = event.get("username", "")
-        subtype = event.get("subtype", "")
-
-        # Debug logging
-        log_msg(f"[WEBHOOK] Message details - user: {user_id}, bot: {bot_id}, app: {app_id}, username: {username}")
-
         # Skip subtypes like message_changed, message_deleted
+        subtype = event.get("subtype", "")
         if subtype:
             log_msg(f"[WEBHOOK] Skipping subtype: {subtype}")
             return jsonify({"status": "ok"})
 
-        # Check if this is a HubSpot message (multiple detection methods)
-        is_hubspot = (
-            # Check by configured bot_id
-            (HUBSPOT_BOT_ID and bot_id == HUBSPOT_BOT_ID) or
-            # Check by configured app_id
-            (HUBSPOT_APP_ID and app_id == HUBSPOT_APP_ID) or
-            # Check by configured user_id (HubSpot integration user)
-            (HUBSPOT_USER_ID and user_id == HUBSPOT_USER_ID) or
-            # Check by username (HubSpot messages have "HubSpot" in username)
-            (username and "hubspot" in username.lower()) or
-            # Check by app_id (HubSpot Slack app ID is A0T8HPHHK)
-            (app_id == "A0T8HPHHK")
-        )
+        # Get message text
+        message = event.get("text", "")
+        channel = event.get("channel", "")
 
-        # If not HubSpot, skip
-        if not is_hubspot:
-            log_msg(f"[WEBHOOK] Skipping non-HubSpot message")
-            return jsonify({"status": "skipped", "reason": "not_hubspot"})
+        # IMPORTANT: Only process messages that look like lead notifications
+        # Check if message contains lead notification patterns
+        is_lead_notification = False
+        for pattern in LEAD_PATTERNS:
+            if re.search(pattern, message, re.IGNORECASE):
+                is_lead_notification = True
+                break
+
+        if not is_lead_notification:
+            log_msg(f"[WEBHOOK] Skipping - not a lead notification")
+            return jsonify({"status": "skipped", "reason": "not_lead_format"})
+
+        # Filter by channel (if configured)
+        if ALLOWED_CHANNELS and channel not in ALLOWED_CHANNELS:
+            log_msg(f"[WEBHOOK] Skipping - channel {channel} not in allowed list")
+            return jsonify({"status": "skipped", "reason": "channel_not_allowed"})
+
+        ts = event.get("ts", "")
 
         # Filter by channel (if configured)
         channel = event.get("channel", "")
