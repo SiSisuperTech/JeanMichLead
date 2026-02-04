@@ -24,9 +24,10 @@ PORT = int(os.getenv("PORT", 8000))
 ALLOWED_CHANNELS = os.getenv("SLACK_ALLOWED_CHANNELS", "").split(",") if os.getenv("SLACK_ALLOWED_CHANNELS") else []
 
 # HubSpot detection - only process HubSpot bot messages
-# Can override by setting to specific HubSpot bot_id or app_id
+# Can override by setting to specific HubSpot bot_id, app_id, or user_id
 HUBSPOT_BOT_ID = os.getenv("HUBSPOT_BOT_ID", "")  # e.g., B1234567890
 HUBSPOT_APP_ID = os.getenv("HUBSPOT_APP_ID", "")  # e.g., A0T8HPHHK
+HUBSPOT_USER_ID = os.getenv("HUBSPOT_USER_ID", "")  # HubSpot integration user ID (e.g., U07Q...)
 
 # Warn if tokens missing (but don't exit - allows partial functionality)
 if not SLACK_BOT_TOKEN:
@@ -406,17 +407,45 @@ def build_qualification_prompt(lead: dict, engagement: dict = None) -> str:
     """Build AI prompt for GLM-4.7 with web_search tool and engagement context"""
     postal = lead.get('postalCode', '')
     name = lead.get('fullName', '')
+    email = lead.get('email', '')
 
-    prompt = f'Is "{name} dentiste {postal}" a real dentist? Search and give me the address, phone, and sources.'
+    prompt = f'''You are a lead qualification specialist.
+Your task is to determine whether "{name}" is a REAL, PRACTICING DENTIST (chirurgien-dentiste).
+
+Search the web using:
+"{name} dentiste {postal}"
+"{name} chirurgien-dentiste {postal}"
+
+CRITICAL RULES:
+1. The EXACT full name "{name}" must appear explicitly associated with the profession "dentist" or "chirurgien-dentiste".
+2. If the person is identified in ANY other profession (software, consulting, business, IT, real estate, etc.) -> NOT QUALIFIED.
+3. Similar names, partial matches, or initials -> NOT QUALIFIED.
+4. If no reliable source explicitly confirms this person as a dentist -> NOT QUALIFIED.
+5. Sources MUST be real, verifiable URLs from: Doctolib, PagesJaunes, Annuaire Sante, Ordre des chirurgiens-dentistes, Official dental practice website.
+6. If there is any doubt -> default to NOT QUALIFIED.
+7. NEVER invent sources or URLs.
+
+OUTPUT FORMAT (EXACT):
+PROFILE: [Dentist / Not Dentist]
+QUALIFIED: [yes/no]
+SCORE: [0-100]
+SOURCES:
+- http://...
+- http://...
+REASONING: [brief explanation]
+
+Scoring:
+- 90-100: Exact match on multiple official dental directories
+- 70-89: Exact match on one reliable source
+- 0-69: NOT QUALIFIED (no match, wrong profession, similar name only, etc.)'''
 
     # Add engagement history context if available
     if engagement and engagement.get("has_history"):
-        prompt += '\n\nIMPORTANT - Previous engagement history for this lead:\n'
+        prompt += f'\n\nPrevious engagement history for this lead:\n'
         for line in engagement.get("summary", []):
             prompt += f"  {line}\n"
-        prompt += "\nConsider this history when qualifying. If notes say 'wrong number', 'not interested', or 'fake', mark as NOT QUALIFIED."
+        prompt += "\nConsider this history. If notes say 'wrong number', 'not interested', or 'fake', mark as NOT QUALIFIED."
 
-    prompt += '\n\nEnd with: QUALIFIED: yes/no and SCORE: X/100'
     return prompt
 
 # ==================== CALL Z.AI API WITH WEB SEARCH ====================
@@ -473,55 +502,74 @@ def call_ai(prompt: str) -> dict:
             log_msg(f"[AI] EMPTY RESPONSE! Full message: {data['choices'][0]['message']}")
             return {"error": "Empty response from AI", "raw_message": data["choices"][0]["message"]}
 
-        # Parse natural language response
+        log_msg(f"[AI] Full response preview: {text[:500]}...")
+
+        # Parse structured response
         result = {
             "is_dentist": False,
             "profile_type": "SPAM",
             "score": 0,
             "qualified": False,
-            "reasoning": text[:300]
+            "reasoning": text[:500],
+            "sources": []
         }
 
         text_upper = text.upper()
 
-        # Check if it's spam first (explicit mentions)
-        if " NOT A REAL DENTIST" in text_upper or " NOT DENTIST" in text_upper or "FAKE" in text_upper[:400]:
-            result["profile_type"] = "SPAM"
-            result["qualified"] = False
-            result["score"] = 0
-        # Check if dentist (look for positive indicators with context)
-        elif (" REAL DENTIST" in text_upper or " IS A DENTIST" in text_upper or "CHIRURGIEN-DENTISTE" in text_upper
-              or "CHIRURGIEN DENTIST" in text_upper):
-            result["is_dentist"] = True
-            result["profile_type"] = "Dentiste"
-
-            # Now check qualified status
-            if "QUALIFIED: NO" in text_upper or "QUALIFIED:NO" in text_upper:
-                result["qualified"] = False
+        # Extract PROFILE
+        profile_match = re.search(r'PROFILE:\s*(\w+)', text, re.IGNORECASE)
+        if profile_match:
+            profile = profile_match.group(1).upper()
+            if profile in ["DENTISTE", "DENTIST", "DENTAL"]:
+                result["profile_type"] = "Dentiste"
+                result["is_dentist"] = True
+            elif profile == "SPAM":
+                result["profile_type"] = "SPAM"
             else:
+                result["profile_type"] = profile
+
+        # Extract QUALIFIED
+        qualified_match = re.search(r'QUALIFIED:\s*(YES|NO)', text, re.IGNORECASE)
+        if qualified_match:
+            result["qualified"] = qualified_match.group(1).upper() == "YES"
+
+        # Extract SCORE
+        score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
+        if score_match:
+            result["score"] = int(score_match.group(1))
+        else:
+            # Default score based on qualified status
+            result["score"] = 90 if result["qualified"] else 0
+
+        # Extract SOURCES
+        sources_match = re.search(r'SOURCES:\s*(.+?)(?:\nREASONING:|$)', text, re.DOTALL | re.IGNORECASE)
+        if sources_match:
+            sources_text = sources_match.group(1).strip()
+            # Extract URLs
+            url_matches = re.findall(r'https?://[^\s\]]+', sources_text)
+            result["sources"] = url_matches[:5]
+
+        # Extract REASONING
+        reasoning_match = re.search(r'REASONING:\s*(.+)', text, re.DOTALL | re.IGNORECASE)
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
+            # Clean up formatting
+            reasoning = re.sub(r'\n+', ' ', reasoning)
+            result["reasoning"] = reasoning[:300]
+
+        # Fallback parsing if structured format not found
+        if not profile_match and not qualified_match:
+            log_msg("[AI] Structured format not found, using fallback parsing")
+            # Look for positive indicators
+            if " REAL DENTIST" in text_upper or " IS A DENTIST" in text_upper:
+                result["is_dentist"] = True
+                result["profile_type"] = "Dentiste"
                 result["qualified"] = True
+                result["score"] = 70  # Lower score for unstructured response
 
-            # Extract score
-            score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
-            if score_match:
-                result["score"] = int(score_match.group(1))
-            else:
-                result["score"] = 90
-
-        # Fallback: check QUALIFIED: indicator at end
-        elif "QUALIFIED: YES" in text_upper or "QUALIFIED:YES" in text_upper:
-            result["qualified"] = True
-            result["is_dentist"] = True
-            result["profile_type"] = "Dentiste"
-            score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
-            result["score"] = int(score_match.group(1)) if score_match else 90
-        elif "QUALIFIED: NO" in text_upper or "QUALIFIED:NO" in text_upper:
-            result["qualified"] = False
-            result["profile_type"] = "SPAM"
-            score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
-            result["score"] = int(score_match.group(1)) if score_match else 0
-
-        log_msg(f"[AI] {result.get('profile_type')} | Qualified: {result.get('qualified')} | Score: {result.get('score')}")
+        log_msg(f"[AI] Profile: {result.get('profile_type')} | Qualified: {result.get('qualified')} | Score: {result.get('score')}")
+        if result.get("sources"):
+            log_msg(f"[AI] Sources found: {len(result['sources'])}")
         return result
 
     except Exception as e:
@@ -721,37 +769,39 @@ def slack_webhook():
             log_msg(f"[WEBHOOK] Skipping non-message event: {event.get('type')}")
             return jsonify({"status": "ok"})
 
-        # IMPORTANT: Only process HubSpot bot messages, skip regular users and other bots
+        # IMPORTANT: Only process HubSpot messages, skip regular users and other bots
         bot_id = event.get("bot_id", "")
         app_id = event.get("app_id", "")
         user_id = event.get("user", "")
         username = event.get("username", "")
         subtype = event.get("subtype", "")
 
+        # Debug logging
+        log_msg(f"[WEBHOOK] Message details - user: {user_id}, bot: {bot_id}, app: {app_id}, username: {username}")
+
         # Skip subtypes like message_changed, message_deleted
         if subtype:
             log_msg(f"[WEBHOOK] Skipping subtype: {subtype}")
             return jsonify({"status": "ok"})
 
-        # Check if this is a HubSpot message
+        # Check if this is a HubSpot message (multiple detection methods)
         is_hubspot = (
-            # Check by bot_id (if configured)
+            # Check by configured bot_id
             (HUBSPOT_BOT_ID and bot_id == HUBSPOT_BOT_ID) or
-            # Check by app_id (if configured)
+            # Check by configured app_id
             (HUBSPOT_APP_ID and app_id == HUBSPOT_APP_ID) or
+            # Check by configured user_id (HubSpot integration user)
+            (HUBSPOT_USER_ID and user_id == HUBSPOT_USER_ID) or
             # Check by username (HubSpot messages have "HubSpot" in username)
-            (username and "hubspot" in username.lower())
+            (username and "hubspot" in username.lower()) or
+            # Check by app_id (HubSpot Slack app ID is A0T8HPHHK)
+            (app_id == "A0T8HPHHK")
         )
 
-        # If it's a regular user message (not from HubSpot), skip
-        if user_id and not bot_id:
-            log_msg(f"[WEBHOOK] Skipping user message (not HubSpot)")
+        # If not HubSpot, skip
+        if not is_hubspot:
+            log_msg(f"[WEBHOOK] Skipping non-HubSpot message")
             return jsonify({"status": "skipped", "reason": "not_hubspot"})
-
-        # If it's a bot but not HubSpot, skip
-        if bot_id and not is_hubspot:
-            log_msg(f"[WEBHOOK] Skipping non-HubSpot bot: {bot_id}")
-            return jsonify({"status": "skipped", "reason": "not_hubspot_bot"})
 
         # Filter by channel (if configured)
         channel = event.get("channel", "")
