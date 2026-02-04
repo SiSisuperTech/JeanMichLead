@@ -579,6 +579,55 @@ def call_ai(prompt: str) -> dict:
     except Exception as e:
         return {"error": f"API call failed: {str(e)}"}
 
+def call_ai_double_check(lead: dict, engagement: dict = None) -> dict:
+    """Call AI twice for confirmation - only qualify if BOTH agree"""
+    prompt = build_qualification_prompt(lead, engagement)
+
+    log_msg("[AI] DOUBLE CHECK - Running first analysis...")
+    result1 = call_ai(prompt)
+
+    if "error" in result1:
+        return result1
+
+    log_msg("[AI] DOUBLE CHECK - Running second analysis...")
+    result2 = call_ai(prompt)
+
+    if "error" in result2:
+        return result2
+
+    # Compare results
+    qualified1 = result1.get("qualified", False)
+    qualified2 = result2.get("qualified", False)
+    score1 = result1.get("score", 0)
+    score2 = result2.get("score", 0)
+
+    log_msg(f"[AI] Check 1: Qualified={qualified1}, Score={score1}")
+    log_msg(f"[AI] Check 2: Qualified={qualified2}, Score={score2}")
+
+    # Both must agree on qualified status
+    if qualified1 != qualified2:
+        log_msg("[AI] DOUBLE CHECK - DISAGREE! Defaulting to NOT QUALIFIED")
+        return {
+            "qualified": False,
+            "profile_type": "SPAM",
+            "score": min(score1, score2),
+            "reasoning": f"Double check disagreement: Check1={qualified1}, Check2={qualified2}. Defaulting to NOT QUALIFIED for safety.",
+            "double_check": "disagreed"
+        }
+
+    # Both agree - use average score
+    avg_score = (score1 + score2) // 2
+    log_msg(f"[AI] DOUBLE CHECK - AGREED! Qualified={qualified1}, Score={avg_score}")
+
+    return {
+        "qualified": qualified1,
+        "profile_type": result1.get("profile_type", "SPAM"),
+        "score": avg_score,
+        "reasoning": result1.get("reasoning", ""),
+        "sources": result1.get("sources", []),
+        "double_check": "agreed"
+    }
+
 # ==================== FORMAT SLACK MESSAGE ====================
 def format_slack_message(lead: dict, qualification: dict) -> str:
     """Format the Slack reply message"""
@@ -860,15 +909,20 @@ def slack_webhook():
         if hubspot_result.get("contact_id"):
             engagement_history = get_engagement_history(hubspot_result["contact_id"])
 
-        # AI qualification
-        log_msg("[AI] Starting analysis...")
-        prompt = build_qualification_prompt(lead, engagement_history)
-        qualification = call_ai(prompt)
+        # AI qualification with double check
+        log_msg("[AI] Starting double-check analysis...")
+        qualification = call_ai_double_check(lead, engagement_history)
 
-        log_msg("[AI] Result:")
+        if "error" in qualification:
+            log_msg(f"[AI] ERROR: {qualification.get('error')}")
+            stats["errors"] += 1
+            return jsonify({"status": "error", "message": qualification.get("error")})
+
+        log_msg("[AI] Final Result:")
         log_msg(f"  - Profile: {qualification.get('profile_type', '?')}")
         log_msg(f"  - Score: {qualification.get('score', 0)}/100")
         log_msg(f"  - Qualified: {qualification.get('qualified', False)}")
+        log_msg(f"  - Double Check: {qualification.get('double_check', 'unknown')}")
 
         if "error" in qualification:
             log_msg(f"[AI] ERROR: {qualification.get('error')}")
