@@ -8,9 +8,9 @@ import os
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
-from requests import post, patch
+from requests import post, patch, get
 
 # ==================== CONFIG ====================
 # API tokens from environment variables (Railway, local, etc.)
@@ -243,14 +243,168 @@ def update_hubspot_contact(contact_id: str, qualified: bool):
         log_activity("error", f"HubSpot update failed: {str(e)}", "", {"contact_id": contact_id})
         return False
 
+# ==================== HUBSPOT ENGAGEMENT HISTORY ====================
+def get_engagement_history(contact_id: str) -> dict:
+    """Get all engagement history for a contact (notes, calls, tasks, meetings)"""
+    if not HUBSPOT_TOKEN:
+        return {"has_history": False, "reason": "No HubSpot token"}
+
+    history = {
+        "notes": [],
+        "calls": [],
+        "tasks": [],
+        "meetings": [],
+        "summary": []
+    }
+
+    try:
+        # 1. Get Notes
+        response = get(
+            "https://api.hubapi.com/crm/v3/objects/notes",
+            headers={"Authorization": f"Bearer {HUBSPOT_TOKEN}"},
+            params={
+                "limit": 10,
+                "properties": ["hs_note_body", "hs_createdate", "hs_object_id"],
+                "archived": "false"
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            for note in data.get("results", []):
+                props = note.get("properties", {})
+                body = props.get("hs_note_body", "")
+                # Clean HTML from note body
+                import re
+                body = re.sub(r'<[^>]+>', '', body).strip()
+                if body:
+                    history["notes"].append({
+                        "date": props.get("hs_createdate", "")[:10],
+                        "body": body[:200]
+                    })
+
+        # 2. Get Calls
+        response = get(
+            "https://api.hubapi.com/crm/v3/objects/calls",
+            headers={"Authorization": f"Bearer {HUBSPOT_TOKEN}"},
+            params={
+                "limit": 10,
+                "properties": ["hs_call_title", "hs_call_body", "hs_call_direction", "hs_call_status", "hs_createdate"]
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            for call in data.get("results", []):
+                props = call.get("properties", {})
+                title = props.get("hs_call_title", "")
+                body = props.get("hs_call_body", "")
+                direction = props.get("hs_call_direction", "")
+                if title or body:
+                    history["calls"].append({
+                        "date": props.get("hs_createdate", "")[:10],
+                        "direction": direction,
+                        "title": title,
+                        "body": body[:150]
+                    })
+
+        # 3. Get Tasks
+        response = get(
+            "https://api.hubapi.com/crm/v3/objects/tasks",
+            headers={"Authorization": f"Bearer {HUBSPOT_TOKEN}"},
+            params={
+                "limit": 10,
+                "properties": ["hs_task_subject", "hs_task_status", "hs_task_priority", "hs_timestamp"]
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            for task in data.get("results", []):
+                props = task.get("properties", {})
+                subject = props.get("hs_task_subject", "")
+                status = props.get("hs_task_status", "")
+                if subject:
+                    history["tasks"].append({
+                        "date": props.get("hs_timestamp", "")[:10],
+                        "status": status,
+                        "subject": subject
+                    })
+
+        # 4. Get Meetings
+        response = get(
+            "https://api.hubapi.com/crm/v3/objects/meetings",
+            headers={"Authorization": f"Bearer {HUBSPOT_TOKEN}"},
+            params={
+                "limit": 10,
+                "properties": ["hs_meeting_title", "hs_meeting_body", "hs_meeting_starttime", "hs_meeting_status"]
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            for meeting in data.get("results", []):
+                props = meeting.get("properties", {})
+                title = props.get("hs_meeting_title", "")
+                if title:
+                    history["meetings"].append({
+                        "date": props.get("hs_meeting_starttime", "")[:10],
+                        "status": props.get("hs_meeting_status", ""),
+                        "title": title
+                    })
+
+        # Build summary for AI
+        if history["notes"]:
+            history["summary"].append(f"Notes: {len(history['notes'])} found")
+            for note in history["notes"][:3]:
+                history["summary"].append(f"  - [{note['date']}] {note['body'][:80]}")
+
+        if history["calls"]:
+            history["summary"].append(f"Calls: {len(history['calls'])} found")
+            for call in history["calls"][:3]:
+                history["summary"].append(f"  - [{call['date']}] {call['direction']}: {call['title'][:50]}")
+
+        if history["tasks"]:
+            history["summary"].append(f"Tasks: {len(history['tasks'])} pending")
+            for task in history["tasks"][:3]:
+                history["summary"].append(f"  - [{task['status']}] {task['subject'][:50]}")
+
+        if history["meetings"]:
+            history["summary"].append(f"Meetings: {len(history['meetings'])} scheduled/completed")
+            for meeting in history["meetings"][:3]:
+                history["summary"].append(f"  - [{meeting['date']}] {meeting['title'][:50]}")
+
+        history["has_history"] = bool(history["notes"] or history["calls"] or history["tasks"] or history["meetings"])
+
+        log_msg(f"[HUBSPOT] Engagement: {len(history['notes'])} notes, {len(history['calls'])} calls, {len(history['tasks'])} tasks, {len(history['meetings'])} meetings")
+
+        return history
+
+    except Exception as e:
+        log_msg(f"[HUBSPOT] Engagement fetch error: {str(e)}")
+        return {"has_history": False, "error": str(e)}
+
 # ==================== BUILD QUALIFICATION PROMPT ====================
-def build_qualification_prompt(lead: dict) -> str:
-    """Build AI prompt for GLM-4.7 with web_search tool"""
+def build_qualification_prompt(lead: dict, engagement: dict = None) -> str:
+    """Build AI prompt for GLM-4.7 with web_search tool and engagement context"""
     postal = lead.get('postalCode', '')
     name = lead.get('fullName', '')
 
-    # Simple direct query - web_search works better with straightforward prompts
-    return f'Is "{name} dentiste {postal}" a real dentist? Search and give me the address, phone, and sources where you found this information. End with: QUALIFIED: yes/no and SCORE: X/100'
+    prompt = f'Is "{name} dentiste {postal}" a real dentist? Search and give me the address, phone, and sources.'
+
+    # Add engagement history context if available
+    if engagement and engagement.get("has_history"):
+        prompt += '\n\nIMPORTANT - Previous engagement history for this lead:\n'
+        for line in engagement.get("summary", []):
+            prompt += f"  {line}\n"
+        prompt += "\nConsider this history when qualifying. If notes say 'wrong number', 'not interested', or 'fake', mark as NOT QUALIFIED."
+
+    prompt += '\n\nEnd with: QUALIFIED: yes/no and SCORE: X/100'
+    return prompt
 
 # ==================== CALL Z.AI API WITH WEB SEARCH ====================
 def call_ai(prompt: str) -> dict:
@@ -608,9 +762,14 @@ def slack_webhook():
         else:
             log_msg("[HUBSPOT] New lead")
 
+        # Get engagement history if contact exists
+        engagement_history = None
+        if hubspot_result.get("contact_id"):
+            engagement_history = get_engagement_history(hubspot_result["contact_id"])
+
         # AI qualification
         log_msg("[AI] Starting analysis...")
-        prompt = build_qualification_prompt(lead)
+        prompt = build_qualification_prompt(lead, engagement_history)
         qualification = call_ai(prompt)
 
         log_msg("[AI] Result:")

@@ -4,6 +4,7 @@
 import os
 import sys
 import json
+import re
 from requests import post
 
 # Config - accept from env or arg
@@ -13,13 +14,13 @@ if not ZAI_API_KEY:
     print("Usage: python test_ai.py <api_key>")
     exit(1)
 
-# Real lead data
+# Real lead data - test with a different lead
 MOCK_LEAD = {
-    'fullName': 'Yann Panissard',
-    'email': 'yann-panissard@orange.fr',
-    'phone': '0000000',
+    'fullName': 'Jean Dupont',
+    'email': 'jean.dupont@gmail.com',
+    'phone': '0600000000',
     'country': 'France',
-    'postalCode': '82700'
+    'postalCode': '75001'
 }
 
 def build_prompt(lead: dict) -> str:
@@ -50,7 +51,7 @@ def call_ai(prompt: str) -> dict:
                     "count": 5
                 }
             }],
-            "max_tokens": 4000,
+            "max_tokens": 8000,
             "temperature": 0
         }
 
@@ -103,7 +104,6 @@ def call_ai(prompt: str) -> dict:
                 result["qualified"] = True
 
             # Extract score
-            import re
             score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
             if score_match:
                 result["score"] = int(score_match.group(1))
