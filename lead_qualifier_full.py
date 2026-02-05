@@ -111,7 +111,8 @@ def extract_lead_data(message: str) -> dict:
             r'Tel\s*:\s*([+\d\s-]+)',
             r'Téléphone\s*:\s*([+\d\s-]+)',
             r'GSM\s*:\s*([+\d\s-]+)',
-            r'\b(?:0|\+33)[\d\s-]{8,}\b',  # French phone pattern
+            r'\+\d{1,3}[\s-]?\d[\d\s-]{7,}',  # International format (+32, +33, etc)
+            r'\b0[\d\s-]{8,}\b',  # Local format starting with 0
             r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # General pattern
         ]
         for pattern in phone_patterns:
@@ -243,8 +244,8 @@ def update_hubspot_contact(contact_id: str, qualified: bool):
                 },
                 json={
                     "properties": {
-                        "hs_lead_status": "UNQUALIFIED",
-                        "lead_status": "KO"
+                        "lifecyclestage": "lead",
+                        "lead_status": "Not Qualified"
                     }
                 },
                 timeout=10
@@ -874,7 +875,8 @@ def slack_webhook():
             elapsed = (datetime.now() - last_processed).total_seconds()
             if elapsed < 300:  # 5 minutes
                 log_msg(f"[SKIP] Duplicate detected - processed {email} {int(elapsed)}s ago")
-                return jsonify({"status": "skipped"})
+                log_separator()
+                return jsonify({"status": "skipped", "reason": "duplicate"})
 
         # Mark email as in-progress to prevent race condition
         if email:
