@@ -822,13 +822,7 @@ def slack_webhook():
             log_msg(f"[WEBHOOK] Skipping non-message event: {event.get('type')}")
             return jsonify({"status": "ok"})
 
-        # Skip subtypes like message_changed, message_deleted
-        subtype = event.get("subtype", "")
-        if subtype:
-            log_msg(f"[WEBHOOK] Skipping subtype: {subtype}")
-            return jsonify({"status": "ok"})
-
-        # Get message text
+        # Get message text first to check for lead patterns
         message = event.get("text", "")
         channel = event.get("channel", "")
 
@@ -844,20 +838,18 @@ def slack_webhook():
             log_msg(f"[WEBHOOK] Skipping - not a lead notification")
             return jsonify({"status": "skipped", "reason": "not_lead_format"})
 
+        # Skip subtypes like message_changed, message_deleted UNLESS it's a lead notification
+        # Allow bot_message subtype for lead notifications (HubSpot sends these)
+        subtype = event.get("subtype", "")
+        if subtype and subtype not in ["bot_message"]:
+            log_msg(f"[WEBHOOK] Skipping subtype: {subtype}")
+            return jsonify({"status": "ok"})
+
         # Filter by channel (if configured)
         if ALLOWED_CHANNELS and channel not in ALLOWED_CHANNELS:
             log_msg(f"[WEBHOOK] Skipping - channel {channel} not in allowed list")
             return jsonify({"status": "skipped", "reason": "channel_not_allowed"})
 
-        ts = event.get("ts", "")
-
-        # Filter by channel (if configured)
-        channel = event.get("channel", "")
-        if ALLOWED_CHANNELS and channel not in ALLOWED_CHANNELS:
-            log_msg(f"[WEBHOOK] Skipping - channel {channel} not in allowed list")
-            return jsonify({"status": "skipped", "reason": "channel_not_allowed"})
-
-        message = event.get("text", "")
         ts = event.get("ts", "")
 
         if not message or not channel:
