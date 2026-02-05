@@ -779,14 +779,13 @@ def find_user_by_name(name: str) -> str:
 
 @app.route('/', methods=['GET'])
 def index():
-    """Simple index - dashboard removed for security"""
-    # Don't log health checks or index requests to reduce noise
-    return jsonify({
-        "status": "running",
-        "service": "dental-lead-qualifier",
-        "webhook": "/webhook",
-        "health": "/health"
-    }), 200, {'Cache-Control': 'no-cache'}
+    """Simple index - minimal response"""
+    return '', 200
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return '', 200
 
 @app.route('/test', methods=['GET', 'POST'])
 def test_endpoint():
@@ -996,11 +995,6 @@ def get_stats():
 def get_logs():
     """Get activity log"""
     return jsonify(activity_log[:50])
-
-@app.route('/health', methods=['GET'])
-def health():
-    """Health check endpoint"""
-    return jsonify({"status": "healthy", "service": "dental-lead-qualifier"})
 
 
 # ==================== MAIN ====================
