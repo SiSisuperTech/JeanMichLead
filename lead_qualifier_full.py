@@ -45,6 +45,11 @@ if ALLOWED_CHANNELS:
 
 app = Flask(__name__)
 
+# Disable Flask request logging for health checks and root
+import logging
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.setLevel(logging.ERROR)
+
 # ==================== LOGGING HELPER ====================
 def log_msg(msg: str):
     """Print message with immediate flush"""
@@ -775,12 +780,13 @@ def find_user_by_name(name: str) -> str:
 @app.route('/', methods=['GET'])
 def index():
     """Simple index - dashboard removed for security"""
+    # Don't log health checks or index requests to reduce noise
     return jsonify({
         "status": "running",
         "service": "dental-lead-qualifier",
         "webhook": "/webhook",
         "health": "/health"
-    })
+    }), 200, {'Cache-Control': 'no-cache'}
 
 @app.route('/test', methods=['GET', 'POST'])
 def test_endpoint():
