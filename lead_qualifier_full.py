@@ -434,23 +434,31 @@ def build_qualification_prompt(lead: dict, engagement: dict = None) -> str:
         elif not email_name and '-' in email_local:
             email_name = email_local.replace('-', ' ').title()
 
-    # Build search terms - include email-derived name and broader region
-    search_terms = [
-        f'"{name} dentiste {postal}"',
-        f'"{name} chirurgien-dentiste {postal}"'
-    ]
-    # If postal code exists, also search with department code only (CRITICAL!)
+    # Build search terms - PRIORITIZE OFFICIAL SOURCES FIRST
+    search_terms = []
+
+    # 1. Doctolib - PRIMARY SOURCE (most reliable)
+    search_terms.append(f'"site:doctolib.fr dentiste {name}"')
+    search_terms.append(f'"site:doctolib.fr {name}"')
+
+    # 2. Ordre des Chirurgiens-Dentistes - OFFICIAL REGISTRY
+    search_terms.append(f'"site:ordre-chirurgiens-dentistes.fr {name}"')
+    search_terms.append(f'"site:ordre-chirurgiens-dentistes.fr annuaire {name}"')
+
+    # 3. Department-level search (broader than postal code)
     if postal and len(postal) >= 2:
         dept = postal[:2]
         search_terms.append(f'"{name} dentiste {dept}"')
         search_terms.append(f'"{name} chirurgien-dentiste {dept}"')
-    # Also search without location for broader results
-    search_terms.append(f'"{name} dentiste"')
-    search_terms.append(f'"site:doctolib.fr {name} dentiste"')
 
+    # 4. Email-derived name search
     if email_name and email_name.lower() != name.lower():
-        search_terms.append(f'"{email_name} dentiste"')
         search_terms.append(f'"site:doctolib.fr {email_name}"')
+        search_terms.append(f'"site:ordre-chirurgiens-dentistes.fr {email_name}"')
+
+    # 5. General web search (fallback)
+    search_terms.append(f'"{name} dentiste {postal}"')
+    search_terms.append(f'"{name} chirurgien-dentiste {postal}"')
 
     prompt = f'''You are a lead qualification specialist.
 Your task is to determine whether "{name}" is a REAL, PRACTICING DENTIST (chirurgien-dentiste).
@@ -468,13 +476,14 @@ Search the web using:
 
 CRITICAL RULES:
 1. The email address "{email}" is a STRONG indicator. If it starts with "dr.", "docteur", or contains "cabinet", "dentaire" -> THIS IS LIKELY A DENTIST.
-2. The EXACT full name "{name}" or similar variant "{email_name}" must appear associated with "dentist" or "chirurgien-dentiste".
-3. If the person is identified in ANY other profession (software, consulting, business, IT, real estate, etc.) -> NOT QUALIFIED.
-4. Similar names, partial matches, or initials -> NOT QUALIFIED.
+2. PRIMARY AUTHORIZED SOURCES: Doctolib and Ordre des Chirurgiens-Dentistes are sufficient proof.
+   - A Doctolib profile with "{name}" as a dentist = QUALIFIED (location may vary)
+   - An entry in ordre-chirurgiens-dentistes.fr annuaire = QUALIFIED
+3. The EXACT full name "{name}" or similar variant "{email_name}" must appear associated with "dentist" or "chirurgien-dentiste".
+4. If the person is identified in ANY other profession (software, consulting, business, IT, real estate, etc.) -> NOT QUALIFIED.
 5. If no reliable source explicitly confirms this person as a dentist -> NOT QUALIFIED.
-6. Sources MUST be real, verifiable URLs from: Doctolib, PagesJaunes, Annuaire Sante, Ordre des chirurgiens-dentistes, Official dental practice website.
+6. NEVER invent sources or URLs.
 7. If there is any doubt -> default to NOT QUALIFIED.
-8. NEVER invent sources or URLs.
 
 OUTPUT FORMAT (EXACT):
 PROFILE: [Dentist / Not Dentist]
@@ -486,8 +495,8 @@ SOURCES:
 REASONING: [brief explanation]
 
 Scoring:
-- 90-100: Exact match on multiple official dental directories
-- 70-89: Exact match on one reliable source
+- 90-100: Found on Doctolib OR Ordre des Chirurgiens-Dentistes (verified practicing dentist)
+- 70-89: Found on other reliable sources (PagesJaunes, official practice website)
 - 60-69: Email contains "dr." or similar but no web verification (CAUTION - may qualify)
 - 0-59: NOT QUALIFIED (no match, wrong profession, similar name only, etc.)'''
 
