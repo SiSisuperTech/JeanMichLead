@@ -14,4 +14,6 @@ ENV PORT=8000
 EXPOSE 8000
 
 # Run gunicorn with proper settings for Koyeb
-CMD ["gunicorn", "-b", "0.0.0.0:8000", "--timeout", "120", "--workers", "2", "--threads", "2", "lead_qualifier_full:app"]
+# Increased timeout to 300s to allow API retries
+# Single worker with 4 threads for nano instance (limited memory)
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "--timeout", "300", "--workers", "1", "--threads", "4", "lead_qualifier_full:app"]

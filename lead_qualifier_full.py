@@ -459,131 +459,173 @@ Scoring:
     return prompt
 
 # ==================== CALL Z.AI API WITH WEB SEARCH ====================
-def call_ai(prompt: str) -> dict:
-    """Call Z.ai GLM-4.7 with web_search tool"""
-    try:
-        api_key = os.getenv("ZAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            return {"error": "ZAI_API_KEY not set in environment"}
+def call_ai(prompt: str, max_retries: int = 3) -> dict:
+    """Call Z.ai GLM-4.7 with web_search tool and retry logic"""
+    import time
 
-        url = "https://api.z.ai/api/coding/paas/v4/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
+    api_key = os.getenv("ZAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"error": "ZAI_API_KEY not set in environment"}
 
-        payload = {
-            "model": "glm-4.7",
-            "messages": [{"role": "user", "content": prompt}],
-            "tools": [{
-                "type": "web_search",
-                "web_search": {
-                    "enable": True,
-                    "search_result": True,
-                    "count": 5
-                }
-            }],
-            "max_tokens": 8000,
-            "temperature": 0
-        }
+    url = "https://api.z.ai/api/coding/paas/v4/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
-        log_msg(f"[AI] API: {url}")
-        log_msg(f"[AI] Key: {api_key[:20]}..." if api_key else "[AI] No key!")
-        log_msg("[AI] Calling GLM-4.7 with web_search...")
+    payload = {
+        "model": "glm-4.7",
+        "messages": [{"role": "user", "content": prompt}],
+        "tools": [{
+            "type": "web_search",
+            "web_search": {
+                "enable": True,
+                "search_result": True,
+                "count": 5
+            }
+        }],
+        "max_tokens": 8000,
+        "temperature": 0
+    }
 
-        response = post(url, headers=headers, json=payload, timeout=120)
+    log_msg(f"[AI] API: {url}")
+    log_msg(f"[AI] Key: {api_key[:20]}..." if api_key else "[AI] No key!")
 
-        if response.status_code != 200:
-            log_msg(f"[AI] HTTP {response.status_code}: {response.text[:300]}")
-            return {"error": f"API returned {response.status_code}: {response.text[:200]}"}
+    # Retry loop with exponential backoff
+    for attempt in range(max_retries):
+        try:
+            log_msg(f"[AI] Calling GLM-4.7 with web_search... (Attempt {attempt + 1}/{max_retries})")
 
-        data = response.json()
-        log_msg(f"[AI] Raw response keys: {list(data.keys())}")
+            response = post(url, headers=headers, json=payload, timeout=180)  # Increased to 3 minutes
 
-        if "choices" not in data or not data["choices"]:
-            log_msg(f"[AI] No choices in response: {str(data)[:300]}")
-            return {"error": "No choices in response", "raw": data}
+            if response.status_code != 200:
+                log_msg(f"[AI] HTTP {response.status_code}: {response.text[:300]}")
+                # Don't retry on 4xx errors (client errors)
+                if 400 <= response.status_code < 500:
+                    return {"error": f"API returned {response.status_code}: {response.text[:200]}"}
+                # Retry on 5xx errors
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2  # 2s, 4s, 8s
+                    log_msg(f"[AI] Server error, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                return {"error": f"API returned {response.status_code}: {response.text[:200]}"}
 
-        content = data["choices"][0]["message"].get("content", "")
-        text = content.strip()
-        log_msg(f"[AI] Response: {len(text)} chars")
+            data = response.json()
+            log_msg(f"[AI] Raw response keys: {list(data.keys())}")
 
-        if not text:
-            log_msg(f"[AI] EMPTY RESPONSE! Full message: {data['choices'][0]['message']}")
-            return {"error": "Empty response from AI", "raw_message": data["choices"][0]["message"]}
+            if "choices" not in data or not data["choices"]:
+                log_msg(f"[AI] No choices in response: {str(data)[:300]}")
+                # Retry on transient errors
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2
+                    log_msg(f"[AI] No choices, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                return {"error": "No choices in response", "raw": data}
 
-        log_msg(f"[AI] Full response preview: {text[:500]}...")
+            content = data["choices"][0]["message"].get("content", "")
+            text = content.strip()
+            log_msg(f"[AI] Response: {len(text)} chars")
 
-        # Parse structured response
-        result = {
-            "is_dentist": False,
-            "profile_type": "SPAM",
-            "score": 0,
-            "qualified": False,
-            "reasoning": text[:500],
-            "sources": []
-        }
+            if not text:
+                log_msg(f"[AI] EMPTY RESPONSE! Full message: {data['choices'][0]['message']}")
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 2
+                    log_msg(f"[AI] Empty response, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                return {"error": "Empty response from AI", "raw_message": data["choices"][0]["message"]}
 
-        text_upper = text.upper()
+            log_msg(f"[AI] Full response preview: {text[:500]}...")
 
-        # Extract PROFILE
-        profile_match = re.search(r'PROFILE:\s*(\w+)', text, re.IGNORECASE)
-        if profile_match:
-            profile = profile_match.group(1).upper()
-            if profile in ["DENTISTE", "DENTIST", "DENTAL"]:
-                result["profile_type"] = "Dentiste"
-                result["is_dentist"] = True
-            elif profile == "SPAM":
-                result["profile_type"] = "SPAM"
+            # Parse structured response
+            result = {
+                "is_dentist": False,
+                "profile_type": "SPAM",
+                "score": 0,
+                "qualified": False,
+                "reasoning": text[:500],
+                "sources": []
+            }
+
+            text_upper = text.upper()
+
+            # Extract PROFILE
+            profile_match = re.search(r'PROFILE:\s*(\w+)', text, re.IGNORECASE)
+            if profile_match:
+                profile = profile_match.group(1).upper()
+                if profile in ["DENTISTE", "DENTIST", "DENTAL"]:
+                    result["profile_type"] = "Dentiste"
+                    result["is_dentist"] = True
+                elif profile == "SPAM":
+                    result["profile_type"] = "SPAM"
+                else:
+                    result["profile_type"] = profile
+
+            # Extract QUALIFIED
+            qualified_match = re.search(r'QUALIFIED:\s*(YES|NO)', text, re.IGNORECASE)
+            if qualified_match:
+                result["qualified"] = qualified_match.group(1).upper() == "YES"
+
+            # Extract SCORE
+            score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
+            if score_match:
+                result["score"] = int(score_match.group(1))
             else:
-                result["profile_type"] = profile
+                # Default score based on qualified status
+                result["score"] = 90 if result["qualified"] else 0
 
-        # Extract QUALIFIED
-        qualified_match = re.search(r'QUALIFIED:\s*(YES|NO)', text, re.IGNORECASE)
-        if qualified_match:
-            result["qualified"] = qualified_match.group(1).upper() == "YES"
+            # Extract SOURCES
+            sources_match = re.search(r'SOURCES:\s*(.+?)(?:\nREASONING:|$)', text, re.DOTALL | re.IGNORECASE)
+            if sources_match:
+                sources_text = sources_match.group(1).strip()
+                # Extract URLs
+                url_matches = re.findall(r'https?://[^\s\]]+', sources_text)
+                result["sources"] = url_matches[:5]
 
-        # Extract SCORE
-        score_match = re.search(r'SCORE:\s*(\d+)', text, re.IGNORECASE)
-        if score_match:
-            result["score"] = int(score_match.group(1))
-        else:
-            # Default score based on qualified status
-            result["score"] = 90 if result["qualified"] else 0
+            # Extract REASONING
+            reasoning_match = re.search(r'REASONING:\s*(.+)', text, re.DOTALL | re.IGNORECASE)
+            if reasoning_match:
+                reasoning = reasoning_match.group(1).strip()
+                # Clean up formatting
+                reasoning = re.sub(r'\n+', ' ', reasoning)
+                result["reasoning"] = reasoning[:300]
 
-        # Extract SOURCES
-        sources_match = re.search(r'SOURCES:\s*(.+?)(?:\nREASONING:|$)', text, re.DOTALL | re.IGNORECASE)
-        if sources_match:
-            sources_text = sources_match.group(1).strip()
-            # Extract URLs
-            url_matches = re.findall(r'https?://[^\s\]]+', sources_text)
-            result["sources"] = url_matches[:5]
+            # Fallback parsing if structured format not found
+            if not profile_match and not qualified_match:
+                log_msg("[AI] Structured format not found, using fallback parsing")
+                # Look for positive indicators
+                if " REAL DENTIST" in text_upper or " IS A DENTIST" in text_upper:
+                    result["is_dentist"] = True
+                    result["profile_type"] = "Dentiste"
+                    result["qualified"] = True
+                    result["score"] = 70  # Lower score for unstructured response
 
-        # Extract REASONING
-        reasoning_match = re.search(r'REASONING:\s*(.+)', text, re.DOTALL | re.IGNORECASE)
-        if reasoning_match:
-            reasoning = reasoning_match.group(1).strip()
-            # Clean up formatting
-            reasoning = re.sub(r'\n+', ' ', reasoning)
-            result["reasoning"] = reasoning[:300]
+            log_msg(f"[AI] Profile: {result.get('profile_type')} | Qualified: {result.get('qualified')} | Score: {result.get('score')}")
+            if result.get("sources"):
+                log_msg(f"[AI] Sources found: {len(result['sources'])}")
 
-        # Fallback parsing if structured format not found
-        if not profile_match and not qualified_match:
-            log_msg("[AI] Structured format not found, using fallback parsing")
-            # Look for positive indicators
-            if " REAL DENTIST" in text_upper or " IS A DENTIST" in text_upper:
-                result["is_dentist"] = True
-                result["profile_type"] = "Dentiste"
-                result["qualified"] = True
-                result["score"] = 70  # Lower score for unstructured response
+            # Success! Return result
+            return result
 
-        log_msg(f"[AI] Profile: {result.get('profile_type')} | Qualified: {result.get('qualified')} | Score: {result.get('score')}")
-        if result.get("sources"):
-            log_msg(f"[AI] Sources found: {len(result['sources'])}")
-        return result
+        except Exception as e:
+            error_str = str(e)
+            is_timeout = "timeout" in error_str.lower() or "timed out" in error_str.lower()
 
-    except Exception as e:
-        return {"error": f"API call failed: {str(e)}"}
+            if is_timeout:
+                log_msg(f"[AI] Timeout on attempt {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 3  # 3s, 6s, 12s for timeouts
+                    log_msg(f"[AI] Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                log_msg(f"[AI] All {max_retries} attempts timed out")
+                return {"error": f"API call timed out after {max_retries} attempts"}
+
+            # For other errors, don't retry
+            log_msg(f"[AI] Error: {error_str}")
+            return {"error": f"API call failed: {error_str}"}
 
 def call_ai_double_check(lead: dict, engagement: dict = None) -> dict:
     """Call AI twice for confirmation - only qualify if BOTH agree"""

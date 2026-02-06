@@ -7,7 +7,7 @@ services:
     build:
       type: dockerfile
       dockerfile: Dockerfile
-    run_command: gunicorn -b 0.0.0.0:$PORT --timeout 120 --workers 2 --threads 2 lead_qualifier_full:app
+    run_command: gunicorn -b 0.0.0.0:$PORT --timeout 300 --workers 1 --threads 4 lead_qualifier_full:app
     ports:
       - port: 8000
         protocol: http
