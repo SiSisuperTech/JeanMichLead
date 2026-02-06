@@ -419,21 +419,62 @@ def build_qualification_prompt(lead: dict, engagement: dict = None) -> str:
     name = lead.get('fullName', '')
     email = lead.get('email', '')
 
+    # Extract name from email (e.g., "dr.esposito-farese" -> "Esposito-Farese")
+    email_name = ""
+    if email:
+        email_local = email.split('@')[0].lower()
+        # Remove common prefixes
+        for prefix in ['dr.', 'dr-', 'docteur', 'doc.', 'doc-']:
+            if email_local.startswith(prefix):
+                email_name = email_local[len(prefix):].replace('-', ' ').title()
+                break
+        # If email contains dots, convert to spaces
+        if not email_name and '.' in email_local:
+            email_name = email_local.replace('.', ' ').replace('-', ' ').title()
+        elif not email_name and '-' in email_local:
+            email_name = email_local.replace('-', ' ').title()
+
+    # Build search terms - include email-derived name and broader region
+    search_terms = [
+        f'"{name} dentiste {postal}"',
+        f'"{name} chirurgien-dentiste {postal}"'
+    ]
+    # If postal code exists, also search with department code only (CRITICAL!)
+    if postal and len(postal) >= 2:
+        dept = postal[:2]
+        search_terms.append(f'"{name} dentiste {dept}"')
+        search_terms.append(f'"{name} chirurgien-dentiste {dept}"')
+    # Also search without location for broader results
+    search_terms.append(f'"{name} dentiste"')
+    search_terms.append(f'"site:doctolib.fr {name} dentiste"')
+
+    if email_name and email_name.lower() != name.lower():
+        search_terms.append(f'"{email_name} dentiste"')
+        search_terms.append(f'"site:doctolib.fr {email_name}"')
+
     prompt = f'''You are a lead qualification specialist.
 Your task is to determine whether "{name}" is a REAL, PRACTICING DENTIST (chirurgien-dentiste).
 
+Lead Info:
+- Name: {name}
+- Email: {email}
+- Location: {postal}
+
+CRITICAL: The postal code {postal} may NOT match the practice location exactly.
+ALWAYS search the broader department/region. A dentist in 06 (Alpes-Maritimes) might be in any city!
+
 Search the web using:
-"{name} dentiste {postal}"
-"{name} chirurgien-dentiste {postal}"
+{chr(10).join(search_terms)}
 
 CRITICAL RULES:
-1. The EXACT full name "{name}" must appear explicitly associated with the profession "dentist" or "chirurgien-dentiste".
-2. If the person is identified in ANY other profession (software, consulting, business, IT, real estate, etc.) -> NOT QUALIFIED.
-3. Similar names, partial matches, or initials -> NOT QUALIFIED.
-4. If no reliable source explicitly confirms this person as a dentist -> NOT QUALIFIED.
-5. Sources MUST be real, verifiable URLs from: Doctolib, PagesJaunes, Annuaire Sante, Ordre des chirurgiens-dentistes, Official dental practice website.
-6. If there is any doubt -> default to NOT QUALIFIED.
-7. NEVER invent sources or URLs.
+1. The email address "{email}" is a STRONG indicator. If it starts with "dr.", "docteur", or contains "cabinet", "dentaire" -> THIS IS LIKELY A DENTIST.
+2. The EXACT full name "{name}" or similar variant "{email_name}" must appear associated with "dentist" or "chirurgien-dentiste".
+3. If the person is identified in ANY other profession (software, consulting, business, IT, real estate, etc.) -> NOT QUALIFIED.
+4. Similar names, partial matches, or initials -> NOT QUALIFIED.
+5. If no reliable source explicitly confirms this person as a dentist -> NOT QUALIFIED.
+6. Sources MUST be real, verifiable URLs from: Doctolib, PagesJaunes, Annuaire Sante, Ordre des chirurgiens-dentistes, Official dental practice website.
+7. If there is any doubt -> default to NOT QUALIFIED.
+8. NEVER invent sources or URLs.
 
 OUTPUT FORMAT (EXACT):
 PROFILE: [Dentist / Not Dentist]
@@ -447,7 +488,8 @@ REASONING: [brief explanation]
 Scoring:
 - 90-100: Exact match on multiple official dental directories
 - 70-89: Exact match on one reliable source
-- 0-69: NOT QUALIFIED (no match, wrong profession, similar name only, etc.)'''
+- 60-69: Email contains "dr." or similar but no web verification (CAUTION - may qualify)
+- 0-59: NOT QUALIFIED (no match, wrong profession, similar name only, etc.)'''
 
     # Add engagement history context if available
     if engagement and engagement.get("has_history"):
