@@ -35,7 +35,7 @@
       "typeVersion": 1,
       "position": [
         0,
-        220
+        260
       ]
     },
     {
@@ -49,8 +49,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        240,
-        220
+        320,
+        260
       ]
     },
     {
@@ -64,8 +64,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        480,
-        120
+        320,
+        0
       ]
     },
     {
@@ -92,8 +92,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        720,
-        120
+        960,
+        -140
       ],
       "onError": "continueRegularOutput",
       "credentials": {
@@ -114,8 +114,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        960,
-        120
+        1600,
+        0
       ]
     },
     {
@@ -142,8 +142,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        1200,
-        120
+        1920,
+        0
       ],
       "retryOnFail": true,
       "maxTries": 3,
@@ -166,8 +166,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1440,
-        120
+        2560,
+        0
       ]
     },
     {
@@ -194,8 +194,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        1680,
-        120
+        2880,
+        0
       ],
       "retryOnFail": true,
       "maxTries": 3,
@@ -218,8 +218,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1920,
-        120
+        3520,
+        0
       ]
     },
     {
@@ -233,8 +233,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2160,
-        120
+        3840,
+        0
       ]
     },
     {
@@ -253,8 +253,8 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
       "position": [
-        2400,
-        120
+        4160,
+        0
       ],
       "retryOnFail": true,
       "maxTries": 2,
@@ -277,8 +277,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2400,
-        280
+        4480,
+        160
       ]
     },
     {
@@ -296,8 +296,8 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
       "position": [
-        2640,
-        280
+        4800,
+        160
       ],
       "retryOnFail": true,
       "maxTries": 2,
@@ -325,8 +325,8 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
       "position": [
-        2880,
-        280
+        5120,
+        160
       ],
       "retryOnFail": true,
       "maxTries": 2,
@@ -349,8 +349,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2400,
-        -40
+        4480,
+        -160
       ]
     },
     {
@@ -377,8 +377,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        2640,
-        -40
+        4800,
+        -160
       ],
       "onError": "continueRegularOutput",
       "credentials": {
@@ -399,8 +399,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        600,
-        120
+        640,
+        0
       ]
     },
     {
@@ -414,8 +414,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        840,
-        120
+        1280,
+        0
       ]
     },
     {
@@ -429,8 +429,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        1320,
-        120
+        2240,
+        0
       ]
     },
     {
@@ -444,8 +444,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        1800,
-        120
+        3200,
+        0
       ]
     }
   ],
