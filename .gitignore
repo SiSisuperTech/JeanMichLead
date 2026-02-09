@@ -12,6 +12,9 @@ __pycache__/
 .venv
 venv/
 
+# Local npm cache (used by Codex MCP server config)
+.npm-cache/
+
 # IDE
 .vscode/
 .idea/

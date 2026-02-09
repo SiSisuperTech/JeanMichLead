@@ -1,0 +1,7 @@
+[mcp_servers.n8n-mcp]
+command = "npx"
+args = ["-y", "n8n-mcp"]
+# Keep npx/npm state inside the repo (avoids user-profile permission issues).
+# To enable n8n API tools, set `N8N_API_URL` + `N8N_API_KEY` in your shell environment
+# (recommended) or add them here (but don't commit secrets).
+env = { MCP_MODE = "stdio", LOG_LEVEL = "error", DISABLE_CONSOLE_OUTPUT = "true", NPM_CONFIG_CACHE = ".npm-cache", NPM_CONFIG_OFFLINE = "false", N8N_API_URL = "https://allisone.app.n8n.cloud" }
