@@ -29,7 +29,8 @@ Import `n8n-workflows/lead_qualifier_glm47.json` into n8n and create 3 credentia
 - **HubSpot HTTP Header Auth** with `Authorization: Bearer <HUBSPOT_TOKEN>`
 - **Z.ai HTTP Header Auth** with `Authorization: Bearer <ZAI_API_KEY>`
 
-Optional env vars used by the workflow:
+Optional configuration (no env vars required on n8n Cloud):
 
-- `SLACK_ALLOWED_CHANNELS` (comma-separated channel IDs)
-- `LEAD_QUALIFIER_DM_USER_ID` (defaults to `U08M425UAV8`)
+- Edit the `Config (env)` node:
+  - `slackAllowedChannelsCsv`: comma-separated channel IDs (leave empty to allow all)
+  - `dmUserId`: Slack user ID to DM (defaults to `U08M425UAV8`)

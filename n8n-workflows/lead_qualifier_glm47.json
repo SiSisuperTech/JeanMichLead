@@ -458,12 +458,12 @@
             {
               "name": "slackAllowedChannelsCsv",
               "type": "stringValue",
-              "stringValue": "={{$env.SLACK_ALLOWED_CHANNELS || \"\"}}"
+              "stringValue": ""
             },
             {
               "name": "dmUserId",
               "type": "stringValue",
-              "stringValue": "={{$env.LEAD_QUALIFIER_DM_USER_ID || \"U08M425UAV8\"}}"
+              "stringValue": "U08M425UAV8"
             }
           ]
         },
