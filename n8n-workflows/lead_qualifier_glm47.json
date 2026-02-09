@@ -1,0 +1,677 @@
+{
+  "name": "Slack Lead Qualifier (GLM-4.7 web_search)",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "trigger": [
+          "message"
+        ],
+        "watchWorkspace": true
+      },
+      "id": "slack_trigger",
+      "name": "Slack Trigger",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "__REPLACE__",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "manual_trigger",
+      "name": "Manual Trigger (Test)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{\n  json: {\n    text: 'A new lead has arrived : Anny-claude Leopold - France (33240)→ Coming from Meta - Demo Request→ Phone : +33 6 30 57 91 60 // Mobile :  // Email : poohleac@gmail.com→ Sales owner : Alan Rossato',\n    channel: 'C0000000000',\n    ts: '1234567890.123456',\n    subtype: 'bot_message',\n    bot_id: null\n  }\n}];"
+      },
+      "id": "test_event",
+      "name": "Create Test Slack Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const allowedChannels = (process.env.SLACK_ALLOWED_CHANNELS || '').split(',').map(c => c.trim()).filter(Boolean); // optional allowlist, e.g. ['C123...','C456...']\nconst leadPatterns = [\n  /booked a demo/i,\n  /new lead/i,\n  /a new lead/i,\n  /lead has booked/i,\n  /lead arrived/i,\n];\n\nfunction extractLead(message) {\n  const emailMatch = message.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\\.[a-zA-Z0-9_-]+)/i);\n  const email = emailMatch ? emailMatch[1] : '';\n\n  let phone = '';\n  const slackTelMatch = message.match(/<tel:([^|]+)\\|([^>]+)>/);\n  if (slackTelMatch) {\n    phone = (slackTelMatch[2] || '').trim();\n  } else {\n    const phonePatterns = [\n      /Mobile\\s*:\\s*([+\\d\\s-]+)/i,\n      /Phone\\s*:\\s*([+\\d\\s-]+)/i,\n      /Tel\\s*:\\s*([+\\d\\s-]+)/i,\n      /Téléphone\\s*:\\s*([+\\d\\s-]+)/i,\n      /GSM\\s*:\\s*([+\\d\\s-]+)/i,\n      /\\+\\d{1,3}[\\s-]?\\d[\\d\\s-]{7,}/,\n      /\\b0[\\d\\s-]{8,}\\b/,\n      /\\b\\d{3}[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b/,\n    ];\n    for (const pattern of phonePatterns) {\n      const match = message.match(pattern);\n      if (match) {\n        phone = (match[1] || match[0] || '').trim();\n        break;\n      }\n    }\n  }\n\n  const namePatterns = [\n    /A new lead(?: has arrived)?\\s*:\\s*(.+?)\\s+-/i,\n    /The following lead has booked[^:]*:\\s*(.+?)\\s+-/i,\n  ];\n  let fullName = '';\n  for (const p of namePatterns) {\n    const m = message.match(p);\n    if (m) {\n      fullName = (m[1] || '').trim();\n      break;\n    }\n  }\n\n  const parts = fullName ? fullName.split(/\\s+/) : [];\n  const firstname = parts[0] || '';\n  const lastname = parts.slice(1).join(' ') || '';\n\n  const countryMatch = message.match(/-\\s*([A-Za-z]+)\\s*\\(([^)]+)\\)/);\n  const country = countryMatch ? (countryMatch[1] || '').trim() : '';\n  const postalCode = countryMatch ? (countryMatch[2] || '').trim() : '';\n\n  const sourceMatch = message.match(/Coming from\\s+([^→-]+?)(?:\\s+-|→)/i);\n  const source = sourceMatch ? (sourceMatch[1] || '').trim() : '';\n\n  const ownerMatch = message.match(/Sales owner\\s*:\\s*([^\\n→]+)/i);\n  const salesOwner = ownerMatch ? (ownerMatch[1] || '').trim() : '';\n\n  const emailHintDentist = /(dr\\.|doc|docteur|cabinet|dentaire|dent)/i.test((email || '').toLowerCase());\n\n  return {\n    email,\n    phone,\n    firstname,\n    lastname,\n    fullName,\n    country,\n    postalCode,\n    source,\n    salesOwner,\n    emailHintDentist,\n  };\n}\n\nconst out = [];\n\nfor (const item of items) {\n  const raw = item.json || {};\n\n  // Slack Trigger can output different shapes; normalize to an event-ish object\n  const event = raw.event || raw.body?.event || raw;\n  const message = event.text || '';\n  const channel = event.channel || '';\n  const ts = event.ts || event.event_ts || raw.ts || raw.event_ts || '';\n  const subtype = event.subtype || '';\n  const botId = event.bot_id || null;\n\n  const isLead = leadPatterns.some((p) => p.test(message));\n  const subtypeAllowed = !subtype || subtype === 'bot_message';\n  const channelAllowed = allowedChannels.length === 0 || allowedChannels.includes(channel);\n\n  if (!message || !channel) continue;\n  if (!isLead) continue;\n  if (!subtypeAllowed) continue;\n  if (!channelAllowed) continue;\n\n  const lead = extractLead(message);\n\n  // Basic sanity: require email and a name\n  if (!lead.email || !lead.fullName) continue;\n\n  out.push({\n    json: {\n      ...lead,\n      rawMessage: message,\n      channel,\n      ts,\n    }\n  });\n}\n\nreturn out;"
+      },
+      "id": "extract_lead",
+      "name": "Extract Lead (Slack message -> lead)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  filterGroups: [{\n    filters: [{ propertyName: 'email', operator: 'EQ', value: $json.email }]\n  }],\n  properties: ['hs_lead_status', 'lifecyclestage'],\n  limit: 1\n} }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "hubspot_search",
+      "name": "HubSpot: Search Contact by Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        720,
+        120
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__REPLACE__",
+          "name": "HubSpot (Authorization: Bearer ...)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const input =  || {};\n\n// After Merge Lead + HubSpot, this item contains BOTH lead fields and HubSpot search response.\nconst lead = input;\nconst hubspot = input;\nconst contactId = hubspot?.results?.[0]?.id ?? null;\n\n// Rebuild the GLM prompt (mirrors build_qualification_prompt() in lead_qualifier_full.py)\nconst postal = lead.postalCode || '';\nconst name = lead.fullName || '';\nconst email = lead.email || '';\n\n// Derive a name variant from the email local-part (dr.esposito-farese -> Esposito Farese)\nlet emailName = '';\nif (email) {\n  const emailLocal = (email.split('@')[0] || '').toLowerCase();\n  for (const prefix of ['dr.', 'dr-', 'docteur', 'doc.', 'doc-']) {\n    if (emailLocal.startsWith(prefix)) {\n      emailName = emailLocal.slice(prefix.length).replace(/[-.]/g, ' ').replace(/\\s+/g, ' ').trim();\n      emailName = emailName.replace(/\\b\\w/g, (c) => c.toUpperCase());\n      break;\n    }\n  }\n  if (!emailName && (emailLocal.includes('.') || emailLocal.includes('-'))) {\n    emailName = emailLocal.replace(/[.-]/g, ' ').replace(/\\s+/g, ' ').trim();\n    emailName = emailName.replace(/\\b\\w/g, (c) => c.toUpperCase());\n  }\n}\n\nconst searchTerms = [];\nsearchTerms.push(\\\"site:doctolib.fr dentiste \\\");\nsearchTerms.push(\\\"site:doctolib.fr \\\");\nsearchTerms.push(\\\"site:ordre-chirurgiens-dentistes.fr \\\");\nsearchTerms.push(\\\"site:ordre-chirurgiens-dentistes.fr annuaire \\\");\n\nif (postal && postal.length >= 2) {\n  const dept = postal.slice(0, 2);\n  searchTerms.push(\\\" dentiste \\\");\n  searchTerms.push(\\\" chirurgien-dentiste \\\");\n}\n\nif (emailName && emailName.toLowerCase() !== name.toLowerCase()) {\n  searchTerms.push(\\\"site:doctolib.fr \\\");\n  searchTerms.push(\\\"site:ordre-chirurgiens-dentistes.fr \\\");\n}\n\nsearchTerms.push(\\\" dentiste \\\");\nsearchTerms.push(\\\" chirurgien-dentiste \\\");\n\nlet prompt = You are a lead qualification specialist.\\nYour task is to determine whether \\\"\\\" is a REAL, PRACTICING DENTIST (chirurgien-dentiste).\\n\\nLead Info:\\n- Name: \\n- Email: \\n- Location: \\n\\nCRITICAL: The postal code  may NOT match the practice location exactly.\\nALWAYS search the broader department/region. A dentist in 06 (Alpes-Maritimes) might be in any city!\\n\\nSearch the web using:\\n\\n\\nCRITICAL RULES:\\n1. The email address \\\"\\\" is a STRONG indicator. If it starts with \\\"dr.\\\", \\\"docteur\\\", or contains \\\"cabinet\\\", \\\"dentaire\\\" -> THIS IS LIKELY A DENTIST.\\n2. PRIMARY AUTHORIZED SOURCES: Doctolib and Ordre des Chirurgiens-Dentistes are sufficient proof.\\n   - A Doctolib profile with \\\"\\\" as a dentist = QUALIFIED (location may vary)\\n   - An entry in ordre-chirurgiens-dentistes.fr annuaire = QUALIFIED\\n3. The EXACT full name \\\"\\\" or similar variant \\\"\\\" must appear associated with \\\"dentist\\\" or \\\"chirurgien-dentiste\\\".\\n4. If the person is identified in ANY other profession (software, consulting, business, IT, real estate, etc.) -> NOT QUALIFIED.\\n5. If no reliable source explicitly confirms this person as a dentist -> NOT QUALIFIED.\\n6. NEVER invent sources or URLs.\\n7. If there is any doubt -> default to NOT QUALIFIED.\\n\\nOUTPUT FORMAT (EXACT):\\nPROFILE: [Dentist / Not Dentist]\\nQUALIFIED: [yes/no]\\nSCORE: [0-100]\\nSOURCES:\\n- http://...\\n- http://...\\nREASONING: [brief explanation]\\n\\nScoring:\\n- 90-100: Found on Doctolib OR Ordre des Chirurgiens-Dentistes (verified practicing dentist)\\n- 70-89: Found on other reliable sources (PagesJaunes, official practice website)\\n- 60-69: Email contains \\\"dr.\\\" or similar but no web verification (CAUTION - may qualify)\\n- 0-59: NOT QUALIFIED (no match, wrong profession, similar name only, etc.);\n\nconst dmUserId = process.env.LEAD_QUALIFIER_DM_USER_ID || 'U08M425UAV8';\n\nreturn {\n  json: {\n    ...lead,\n    hubspotContactId: contactId,\n    hubspotContactExists: !!contactId,\n    prompt,\n    dmUserId\n  }\n};"
+      },
+      "id": "build_context",
+      "name": "Build Prompt + Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'glm-4.7',\n  messages: [{ role: 'user', content: $json.prompt }],\n  tools: [{ type: 'web_search', web_search: { enable: true, search_result: true, count: 5 } }],\n  max_tokens: 8000,\n  temperature: 0\n} }}",
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "ai_call_1",
+      "name": "Z.ai GLM-4.7 (Call 1)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1200,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__REPLACE__",
+          "name": "Z.ai (Authorization: Bearer ...)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "function parseModelText(text) {\n  const result = {\n    is_dentist: false,\n    profile_type: 'SPAM',\n    score: 0,\n    qualified: false,\n    reasoning: (text || '').slice(0, 500),\n    sources: [],\n    raw_text: text || ''\n  };\n\n  const profileMatch = (text || '').match(/PROFILE:\\s*(.+)/i);\n  if (profileMatch) {\n    const profile = (profileMatch[1] || '').trim().toUpperCase();\n    if (['DENTISTE', 'DENTIST', 'DENTAL'].includes(profile)) {\n      result.profile_type = 'Dentiste';\n      result.is_dentist = true;\n    } else if (profile === 'SPAM') {\n      result.profile_type = 'SPAM';\n    } else {\n      result.profile_type = profile;\n    }\n  }\n\n  const qualifiedMatch = (text || '').match(/QUALIFIED:\\s*(YES|NO)/i);\n  if (qualifiedMatch) {\n    result.qualified = (qualifiedMatch[1] || '').trim().toUpperCase() === 'YES';\n  }\n\n  const scoreMatch = (text || '').match(/SCORE:\\s*(\\d+)/i);\n  if (scoreMatch) {\n    result.score = Number.parseInt(scoreMatch[1], 10);\n  } else {\n    result.score = result.qualified ? 90 : 0;\n  }\n\n  const sourcesMatch = (text || '').match(/SOURCES:\\s*([\\s\\S]+?)(?:\\nREASONING:|$)/i);\n  if (sourcesMatch) {\n    const sourcesText = (sourcesMatch[1] || '').trim();\n    const urls = sourcesText.match(/https?:\\/\\/[^\\s\\]]+/g) || [];\n    result.sources = urls.slice(0, 5);\n  }\n\n  const reasoningMatch = (text || '').match(/REASONING:\\s*([\\s\\S]+)/i);\n  if (reasoningMatch) {\n    const reasoning = (reasoningMatch[1] || '').replace(/\\n+/g, ' ').trim();\n    result.reasoning = reasoning.slice(0, 300);\n  }\n\n  if (!profileMatch && !qualifiedMatch) {\n    const upper = (text || '').toUpperCase();\n    if (upper.includes(' REAL DENTIST') || upper.includes(' IS A DENTIST')) {\n      result.is_dentist = true;\n      result.profile_type = 'Dentiste';\n      result.qualified = true;\n      result.score = 70;\n    }\n  }\n\n  return result;\n}\n\nconst data = $json || {};\nconst text = data?.choices?.[0]?.message?.content?.trim?.() || '';\n\n// Remove response keys that would clash with the second AI call merge\nconst { choices, usage, model, id, created, ...rest } = data;\n\nreturn {\n  json: {\n    ...rest,\n    ai1: parseModelText(text)\n  }\n};"
+      },
+      "id": "parse_ai_1",
+      "name": "Parse AI Result (1)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  model: 'glm-4.7',\n  messages: [{ role: 'user', content: $json.prompt }],\n  tools: [{ type: 'web_search', web_search: { enable: true, search_result: true, count: 5 } }],\n  max_tokens: 8000,\n  temperature: 0\n} }}",
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "ai_call_2",
+      "name": "Z.ai GLM-4.7 (Call 2)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1680,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__REPLACE__",
+          "name": "Z.ai (Authorization: Bearer ...)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "function parseModelText(text) {\n  const result = {\n    is_dentist: false,\n    profile_type: 'SPAM',\n    score: 0,\n    qualified: false,\n    reasoning: (text || '').slice(0, 500),\n    sources: [],\n    raw_text: text || ''\n  };\n\n  const profileMatch = (text || '').match(/PROFILE:\\s*(.+)/i);\n  if (profileMatch) {\n    const profile = (profileMatch[1] || '').trim().toUpperCase();\n    if (['DENTISTE', 'DENTIST', 'DENTAL'].includes(profile)) {\n      result.profile_type = 'Dentiste';\n      result.is_dentist = true;\n    } else if (profile === 'SPAM') {\n      result.profile_type = 'SPAM';\n    } else {\n      result.profile_type = profile;\n    }\n  }\n\n  const qualifiedMatch = (text || '').match(/QUALIFIED:\\s*(YES|NO)/i);\n  if (qualifiedMatch) {\n    result.qualified = (qualifiedMatch[1] || '').trim().toUpperCase() === 'YES';\n  }\n\n  const scoreMatch = (text || '').match(/SCORE:\\s*(\\d+)/i);\n  if (scoreMatch) {\n    result.score = Number.parseInt(scoreMatch[1], 10);\n  } else {\n    result.score = result.qualified ? 90 : 0;\n  }\n\n  const sourcesMatch = (text || '').match(/SOURCES:\\s*([\\s\\S]+?)(?:\\nREASONING:|$)/i);\n  if (sourcesMatch) {\n    const sourcesText = (sourcesMatch[1] || '').trim();\n    const urls = sourcesText.match(/https?:\\/\\/[^\\s\\]]+/g) || [];\n    result.sources = urls.slice(0, 5);\n  }\n\n  const reasoningMatch = (text || '').match(/REASONING:\\s*([\\s\\S]+)/i);\n  if (reasoningMatch) {\n    const reasoning = (reasoningMatch[1] || '').replace(/\\n+/g, ' ').trim();\n    result.reasoning = reasoning.slice(0, 300);\n  }\n\n  if (!profileMatch && !qualifiedMatch) {\n    const upper = (text || '').toUpperCase();\n    if (upper.includes(' REAL DENTIST') || upper.includes(' IS A DENTIST')) {\n      result.is_dentist = true;\n      result.profile_type = 'Dentiste';\n      result.qualified = true;\n      result.score = 70;\n    }\n  }\n\n  return result;\n}\n\nconst data = $json || {};\nconst text = data?.choices?.[0]?.message?.content?.trim?.() || '';\n\nconst { choices, usage, model, id, created, ...rest } = data;\n\nreturn {\n  json: {\n    ...rest,\n    ai2: parseModelText(text)\n  }\n};"
+      },
+      "id": "parse_ai_2",
+      "name": "Parse AI Result (2)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const data = $json;\nconst r1 = data.ai1 || {};\nconst r2 = data.ai2 || {};\n\nconst qualified1 = !!r1.qualified;\nconst qualified2 = !!r2.qualified;\nconst score1 = Number(r1.score || 0);\nconst score2 = Number(r2.score || 0);\n\nlet final;\nif (qualified1 !== qualified2) {\n  final = {\n    qualified: false,\n    profile_type: 'SPAM',\n    score: Math.min(score1, score2),\n    reasoning: `Double check disagreement: Check1=${qualified1}, Check2=${qualified2}. Defaulting to NOT QUALIFIED for safety.`,\n    sources: (r1.sources || []).slice(0, 5),\n    double_check: 'disagreed'\n  };\n} else {\n  const avg = Math.floor((score1 + score2) / 2);\n  final = {\n    qualified: qualified1,\n    profile_type: r1.profile_type || 'SPAM',\n    score: avg,\n    reasoning: r1.reasoning || '',\n    sources: (r1.sources || []).slice(0, 5),\n    double_check: 'agreed'\n  };\n}\n\nconst reactionName = final.qualified ? 'white_check_mark' : 'x';\nconst dmText = `*New Qualified Lead!* 🦷\\n*Name:* ${data.fullName || 'N/A'}\\n*Email:* ${data.email || 'N/A'}\\n*Phone:* ${data.phone || 'N/A'}\\n*Profile:* ${final.profile_type || 'N/A'}\\n*Score:* ${final.score || 0}/100\\n*Reasoning:* ${(final.reasoning || '').slice(0, 200)}...`;\n\n// Safe HubSpot patch (use only standard fields)\nconst hubspotPatch = {\n  properties: {\n    lifecyclestage: 'lead',\n    hs_lead_status: final.qualified ? 'OPEN' : 'UNQUALIFIED'\n  }\n};\n\nreturn {\n  json: {\n    ...data,\n    qualification: final,\n    reactionName,\n    dmText,\n    hubspotPatch\n  }\n};"
+      },
+      "id": "double_check",
+      "name": "Double Check + Prepare Actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "reaction",
+        "operation": "add",
+        "channelId": {
+          "mode": "id",
+          "value": "={{$json.channel}}"
+        },
+        "timestamp": "={{.ts}}",
+        "name": "={{$json.reactionName}}"
+      },
+      "id": "slack_reaction",
+      "name": "Slack: Add Reaction",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        2400,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "__REPLACE__",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return items.filter((item) => !!item.json.qualification?.qualified);"
+      },
+      "id": "only_qualified",
+      "name": "Only Qualified (guard)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "channel",
+        "operation": "open",
+        "options": {
+          "users": [
+            "={{$json.dmUserId}}"
+          ]
+        }
+      },
+      "id": "open_dm",
+      "name": "Slack: Open DM",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        2640,
+        280
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "__REPLACE__",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "mode": "id",
+          "value": "={{$json.channel.id}}"
+        },
+        "text": "={{$node['Double Check + Prepare Actions'].json.dmText}}"
+      },
+      "id": "send_dm",
+      "name": "Slack: Send DM",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        2880,
+        280
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "__REPLACE__",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return items.filter((item) => !!item.json.hubspotContactId);"
+      },
+      "id": "has_hubspot_contact",
+      "name": "Has HubSpot Contact (guard)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{'https://api.hubapi.com/crm/v3/objects/contacts/' + $json.hubspotContactId}}",
+        "method": "PATCH",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{$json.hubspotPatch}}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "hubspot_update",
+      "name": "HubSpot: Update Contact Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2640,
+        -40
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__REPLACE__",
+          "name": "HubSpot (Authorization: Bearer ...)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const windowMs = 5 * 60 * 1000;\nconst now = Date.now();\n\nconst staticData = this.getWorkflowStaticData('node');\nif (!staticData.seenByEmail) staticData.seenByEmail = {};\n\n// Clean up old entries (keep 1 hour max)\nfor (const [email, ts] of Object.entries(staticData.seenByEmail)) {\n  if (!ts || (now - ts) > (60 * 60 * 1000)) delete staticData.seenByEmail[email];\n}\n\nconst out = [];\nfor (const item of items) {\n  const email = String(item.json.email || '').toLowerCase().trim();\n  if (!email) continue;\n\n  const lastTs = staticData.seenByEmail[email];\n  if (lastTs && (now - lastTs) < windowMs) {\n    // duplicate within window -> drop\n    continue;\n  }\n\n  staticData.seenByEmail[email] = now;\n  out.push(item);\n}\n\nreturn out;"
+      },
+      "id": "dedupe_5m",
+      "name": "Dedupe (5m)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "merge_lead_hubspot",
+      "name": "Merge Lead + HubSpot",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        840,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "merge_context_ai1",
+      "name": "Merge Context + AI1",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1320,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "merge_ai1_ai2",
+      "name": "Merge AI1 + AI2",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1800,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Slack Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Lead (Slack message -> lead)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger (Test)": {
+      "main": [
+        [
+          {
+            "node": "Create Test Slack Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Test Slack Message": {
+      "main": [
+        [
+          {
+            "node": "Extract Lead (Slack message -> lead)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Lead (Slack message -> lead)": {
+      "main": [
+        [
+          {
+            "node": "Dedupe (5m)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: Search Contact by Email": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead + HubSpot",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Build Prompt + Context": {
+      "main": [
+        [
+          {
+            "node": "Z.ai GLM-4.7 (Call 1)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Context + AI1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Z.ai GLM-4.7 (Call 1)": {
+      "main": [
+        [
+          {
+            "node": "Merge Context + AI1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parse AI Result (1)": {
+      "main": [
+        [
+          {
+            "node": "Z.ai GLM-4.7 (Call 2)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge AI1 + AI2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Z.ai GLM-4.7 (Call 2)": {
+      "main": [
+        [
+          {
+            "node": "Merge AI1 + AI2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parse AI Result (2)": {
+      "main": [
+        [
+          {
+            "node": "Double Check + Prepare Actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Double Check + Prepare Actions": {
+      "main": [
+        [
+          {
+            "node": "Slack: Add Reaction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: Add Reaction": {
+      "main": [
+        [
+          {
+            "node": "Only Qualified (guard)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Has HubSpot Contact (guard)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only Qualified (guard)": {
+      "main": [
+        [
+          {
+            "node": "Slack: Open DM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: Open DM": {
+      "main": [
+        [
+          {
+            "node": "Slack: Send DM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has HubSpot Contact (guard)": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Update Contact Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe (5m)": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Search Contact by Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Lead + HubSpot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Lead + HubSpot": {
+      "main": [
+        {
+          "node": "Build Prompt + Context",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Merge Context + AI1": {
+      "main": [
+        {
+          "node": "Parse AI Result (1)",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    },
+    "Merge AI1 + AI2": {
+      "main": [
+        {
+          "node": "Parse AI Result (2)",
+          "type": "main",
+          "index": 0
+        }
+      ]
+    }
+  }
+}

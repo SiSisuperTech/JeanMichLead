@@ -1,0 +1,236 @@
+{
+  "name": "Slack Lead Dentaire - HubSpot - ZAI GLM (FINAL)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "0",
+      "name": "0. MANUAL TEST TRIGGER",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [100, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "const testLead = {\n  body: {\n    type: \"event_callback\",\n    event: {\n      type: \"message\",\n      text: \"A new lead has arrived : Anny-claude Leopold - France (33240)→ Coming from Meta - Demo Request→ Phone : +33 6 30 57 91 60 // Mobile :  // Email : poohleac@gmail.com→ Sales owner : Alan Rossato\",\n      channel: \"C08V21QL6KB\",\n      ts: \"1234567890.123456\",\n      bot_id: null\n    }\n  }\n};\nreturn { json: testLead };"
+      },
+      "id": "0b",
+      "name": "0b. Create Test Lead",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [320, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack-lead-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "1. Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [100, 400],
+      "webhookId": "slack-lead-webhook"
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body || {};\nif (body.type === 'url_verification') {\n  return { json: { _isChallenge: true, challenge: body.challenge } };\n}\nreturn { json: { _isChallenge: false, status: 'ok', originalData: $json } };"
+      },
+      "id": "1b",
+      "name": "1b. Prepare Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [320, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "1c",
+      "name": "1c. Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [540, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json._isChallenge }}", "value2": true }
+          ]
+        }
+      },
+      "id": "1d-check",
+      "name": "1d-check. Was Challenge?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [760, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "return { json: $json.originalData || $json };"
+      },
+      "id": "1e-restore",
+      "name": "1e. Restore Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [980, 550]
+    },
+    {
+      "parameters": {
+        "functionCode": "const input = $json;\nconst data = input.body || input || {};\nconst event = data.event || data;\n\nconst isMessage = event && event.type === 'message';\nconst isBot = !!event.bot_id || event.subtype === 'bot_message';\nconst isSubtype = !!event.subtype;\n\nif (!isMessage || isBot || isSubtype) {\n  return {\n    json: {\n      skip: true,\n      reason: !isMessage ? 'Not a message' : (isBot ? 'Bot' : 'Subtype'),\n      slackChannel: event.channel || '',\n      rawMessage: event.text || ''\n    }\n  };\n}\n\nconst message = event.text || '';\nconst slackChannel = event.channel || '';\n\nconst emailMatch = message.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\\.[a-zA-Z0-9_-]+)/i);\nconst emails = emailMatch ? [emailMatch[1]] : [];\n\nconst mobileMatch = message.match(/Mobile\\s*:\\s*([+\\d\\s-]+)/i);\nconst phoneMatch = message.match(/Phone\\s*:\\s*([+\\d\\s-]+)/i);\nlet phone = '';\nif (mobileMatch && mobileMatch[1].trim()) phone = mobileMatch[1].trim();\nelse if (phoneMatch && phoneMatch[1].trim()) phone = phoneMatch[1].trim();\n\nconst namePatterns = [\n  /A new lead\\s+(?:has\\s+arrived\\s+)?:\\s*(.+?)\\s+-/i,\n  /The following lead has booked[^:]*:\\s*(.+?)\\s+-/i\n];\nlet fullName = '';\nfor (const p of namePatterns) {\n  const m = message.match(p);\n  if (m) { fullName = m[1].trim(); break; }\n}\n\nconst nameParts = fullName ? fullName.split(/\\s+/) : [];\nconst firstname = nameParts[0] || '';\nconst lastname = nameParts.slice(1).join(' ') || '';\n\nconst countryMatch = message.match(/-\\s*([A-Za-z]+)\\s*\\(([^)]+)\\)/);\nconst country = countryMatch ? countryMatch[1].trim() : '';\nconst postalCode = countryMatch ? countryMatch[2].trim() : '';\n\nconst sourceMatch = message.match(/Coming from\\s+([^→-]+?)(?:\\s+-|→)/i);\nconst source = sourceMatch ? sourceMatch[1].trim() : '';\n\nconst ownerMatch = message.match(/Sales owner\\s*:\\s*([^\\n→]+)/i);\nconst salesOwner = ownerMatch ? ownerMatch[1].trim() : '';\n\nconst emailLower = (emails[0] || '').toLowerCase();\nconst emailHintDentist = /(dr\\.|doc|docteur|cabinet|dentaire|dent)/i.test(emailLower);\n\nreturn {\n  json: {\n    skip: false,\n    slackChannel: slackChannel,\n    rawMessage: message,\n    email: emails[0] || '',\n    phone: phone,\n    firstname: firstname,\n    lastname: lastname,\n    fullName: fullName,\n    country: country,\n    postalCode: postalCode,\n    source: source,\n    salesOwner: salesOwner,\n    emailHintDentist: emailHintDentist\n  }\n};"
+      },
+      "id": "2",
+      "name": "2. Extraction Donnees Lead",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1200, 550]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json.skip }}", "value2": true }
+          ]
+        }
+      },
+      "id": "2b",
+      "name": "2b. Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1420, 550]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer __REVOKED__" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"filterGroups\":[{\"filters\":[{\"propertyName\":\"email\",\"operator\":\"EQ\",\"value\":\"{{ $json.email }}\"}]}],\"properties\":[\"hs_lead_status\",\"lifecyclestage\"],\"limit\":1}"
+      },
+      "id": "3",
+      "name": "3. Check Contact HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [1640, 700],
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json.results && $json.results.length > 0 }}", "value2": true }
+          ]
+        }
+      },
+      "id": "4",
+      "name": "4. Contact Existe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1860, 700]
+    },
+    {
+      "parameters": {
+        "functionCode": "const lead = $node['2. Extraction Donnees Lead'].json;\nconst hubspotResult = $node['4. Contact Existe?'].json;\nconst contactId = hubspotResult.results?.[0]?.id || null;\nconst exists = !!contactId;\n\nreturn {\n  json: {\n    ...lead,\n    hubspotContactId: contactId,\n    hubspotContactExists: exists,\n    hasHistory: false\n  }\n};"
+      },
+      "id": "6b",
+      "name": "6b. Merge Result",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2080, 700]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://serpapi.com/search.json?q={{ encodeURIComponent($json.fullName + ' dentiste') }}&api_key=__REVOKED__&engine=google&hl=fr&gl=fr&num=5",
+        "options": {}
+      },
+      "id": "7",
+      "name": "7. SerpAPI Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "continueOnFail": true,
+      "position": [2300, 700]
+    },
+    {
+      "parameters": {
+        "functionCode": "const serpResp = $json || {};\nconst results = Array.isArray(serpResp.organic_results) ? serpResp.organic_results : [];\n\nlet dentistFound = false;\nconst trustedSources = ['doctolib', 'ordre-chirurgiens-dentistes', 'sante.fr', 'ameli.fr'];\n\nresults.forEach(item => {\n  const text = ((item.title || '') + ' ' + (item.snippet || '')).toLowerCase();\n  const link = (item.link || '').toLowerCase();\n  if (text.includes('dentiste') || text.includes('chirurgien dentiste') || trustedSources.some(s => link.includes(s))) {\n    dentistFound = true;\n  }\n});\nreturn {\n  json: {\n    dentistFoundInSearch: dentistFound,\n    searchResultsCount: results.length\n  }\n};"
+      },
+      "id": "8",
+      "name": "8. Parse Search",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2520, 700]
+    },
+    {
+      "parameters": {
+        "functionCode": "const searchResult = $json;\nconst lead = $('6b. Merge Result').first().json;\n\nconst dentistInSearch = searchResult.dentistFoundInSearch ? 'YES - confirmed by Google search' : 'NO - not found in search';\nconst emailHint = lead.emailHintDentist ? 'YES - contains dental keywords' : 'NO';\n\nconst prompt = `You are a dental lead qualification expert. Analyze this lead for a French dental software company:\n\nLEAD DATA:\nName: ${lead.fullName || 'Unknown'}\nEmail: ${lead.email || 'Unknown'}\nPhone: ${lead.phone || 'Unknown'}\nCountry: ${lead.country || 'Unknown'}\nSource: ${lead.source || 'Unknown'}\n\nVERIFICATION SIGNALS:\n✓ Dentist found in Google search: ${dentistInSearch}\n✓ Email contains dental terms (dr/doctor/cabinet): ${emailHint}\n\nSCORING CRITERIA (0-100):\n+40 points: Name appears in dentist search results\n+30 points: Email contains dental-related terms\n+20 points: Professional email domain (not gmail/yahoo/etc)\n+10 points: Complete contact info (phone + email)\n\nQUALIFICATION RULES:\n- Score 70+ = QUALIFIED (hot lead)\n- Score 40-69 = POSSIBLE (needs verification)\n- Score <40 = UNQUALIFIED or SPAM\n\nProfile types:\n- \"Dentiste\": Confirmed dental professional\n- \"Autre\": Related but not dentist (lab, supplier, student)\n- \"SPAM\": Invalid, fake, or irrelevant\n\nReturn JSON only:\n{\n  \"is_dentist\": true/false,\n  \"profile_type\": \"Dentiste\"|\"Autre\"|\"SPAM\",\n  \"score\": 0-100,\n  \"qualified\": true/false,\n  \"reasoning\": \"brief explanation of score and decision\"\n}`;\n\nreturn { json: { ...lead, ...searchResult, promptForAI: prompt } };"
+      },
+      "id": "9",
+      "name": "9. Build Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2740, 700]
+    }
+  ],
+  "connections": {
+    "0. MANUAL TEST TRIGGER": {
+      "main": [[{"node": "0b. Create Test Lead", "type": "main", "index": 0}]]
+    },
+    "0b. Create Test Lead": {
+      "main": [[{"node": "2. Extraction Donnees Lead", "type": "main", "index": 0}]]
+    },
+    "1. Webhook": {
+      "main": [[{"node": "1b. Prepare Response", "type": "main", "index": 0}]]
+    },
+    "1b. Prepare Response": {
+      "main": [[{"node": "1c. Respond to Webhook", "type": "main", "index": 0}]]
+    },
+    "1c. Respond to Webhook": {
+      "main": [[{"node": "1d-check. Was Challenge?", "type": "main", "index": 0}]]
+    },
+    "1d-check. Was Challenge?": {
+      "main": [[], [{"node": "1e. Restore Data", "type": "main", "index": 0}]]
+    },
+    "1e. Restore Data": {
+      "main": [[{"node": "2. Extraction Donnees Lead", "type": "main", "index": 0}]]
+    },
+    "2. Extraction Donnees Lead": {
+      "main": [[{"node": "2b. Skip?", "type": "main", "index": 0}]]
+    },
+    "2b. Skip?": {
+      "main": [[], [{"node": "3. Check Contact HubSpot", "type": "main", "index": 0}]]
+    },
+    "3. Check Contact HubSpot": {
+      "main": [[{"node": "4. Contact Existe?", "type": "main", "index": 0}]]
+    },
+    "4. Contact Existe?": {
+      "main": [[], [{"node": "6b. Merge Result", "type": "main", "index": 0}]]
+    },
+    "6b. Merge Result": {
+      "main": [[{"node": "7. SerpAPI Search", "type": "main", "index": 0}]]
+    },
+    "7. SerpAPI Search": {
+      "main": [[{"node": "8. Parse Search", "type": "main", "index": 0}]]
+    },
+    "8. Parse Search": {
+      "main": [[{"node": "9. Build Prompt", "type": "main", "index": 0}]]
+    },
+    "9. Build Prompt": {
+      "main": []
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
