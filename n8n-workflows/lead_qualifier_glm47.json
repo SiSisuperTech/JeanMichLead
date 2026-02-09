@@ -246,7 +246,8 @@
           "value": "={{$json.channel}}"
         },
         "timestamp": "={{.ts}}",
-        "name": "={{$json.reactionName}}"
+        "name": "={{$json.reactionName}}",
+        "authentication": "oAuth2"
       },
       "id": "slack_reaction",
       "name": "Slack: Add Reaction",
@@ -289,7 +290,8 @@
           "users": [
             "={{$json.dmUserId}}"
           ]
-        }
+        },
+        "authentication": "oAuth2"
       },
       "id": "open_dm",
       "name": "Slack: Open DM",
@@ -318,7 +320,8 @@
           "mode": "id",
           "value": "={{$json.channel.id}}"
         },
-        "text": "={{$node['Double Check + Prepare Actions'].json.dmText}}"
+        "text": "={{$node['Double Check + Prepare Actions'].json.dmText}}",
+        "authentication": "oAuth2"
       },
       "id": "send_dm",
       "name": "Slack: Send DM",
@@ -392,7 +395,7 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "const windowMs = 5 * 60 * 1000;\nconst now = Date.now();\n\nconst staticData = this.getWorkflowStaticData('node');\nif (!staticData.seenByEmail) staticData.seenByEmail = {};\n\n// Clean up old entries (keep 1 hour max)\nfor (const [email, ts] of Object.entries(staticData.seenByEmail)) {\n  if (!ts || (now - ts) > (60 * 60 * 1000)) delete staticData.seenByEmail[email];\n}\n\nconst out = [];\nfor (const item of items) {\n  const email = String(item.json.email || '').toLowerCase().trim();\n  if (!email) continue;\n\n  const lastTs = staticData.seenByEmail[email];\n  if (lastTs && (now - lastTs) < windowMs) {\n    // duplicate within window -> drop\n    continue;\n  }\n\n  staticData.seenByEmail[email] = now;\n  out.push(item);\n}\n\nreturn out;"
+        "jsCode": "// Best-effort 5-minute dedupe by email.\n// On some n8n Cloud runtimes workflow static data isn't available in Code nodes.\n// In that case, this node becomes a pass-through (no dedupe) instead of failing.\n\nconst windowMs = 5 * 60 * 1000;\nconst now = Date.now();\n\nlet getStaticData = null;\ntry {\n  if (this && typeof this.getWorkflowStaticData === 'function') {\n    getStaticData = this.getWorkflowStaticData.bind(this);\n  }\n} catch (e) {}\n\nif (!getStaticData && typeof $getWorkflowStaticData === 'function') {\n  getStaticData = $getWorkflowStaticData;\n}\n\nif (!getStaticData) {\n  return items;\n}\n\nconst staticData = getStaticData('node');\nif (!staticData.seenByEmail) staticData.seenByEmail = {};\n\n// Clean up old entries (keep 1 hour max)\nfor (const [email, ts] of Object.entries(staticData.seenByEmail)) {\n  if (!ts || (now - ts) > (60 * 60 * 1000)) delete staticData.seenByEmail[email];\n}\n\nconst out = [];\nfor (const item of items) {\n  const email = String(item.json.email || '').toLowerCase().trim();\n  if (!email) continue;\n\n  const lastTs = staticData.seenByEmail[email];\n  if (lastTs && (now - lastTs) < windowMs) {\n    continue;\n  }\n\n  staticData.seenByEmail[email] = now;\n  out.push(item);\n}\n\nreturn out;"
       },
       "id": "dedupe_5m",
       "name": "Dedupe (5m)",
