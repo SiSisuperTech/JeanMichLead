@@ -14,7 +14,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Test data - REPLACE these values with a real message from your Slack\nreturn [{\n  json: {\n    channel: 'C08V21QL6KB',  // jordan-test channel\n    ts: '1739817600.123456',  // REPLACE with real message timestamp\n    testMessage: '✅ **Test Reply** - This should appear in thread!\\n\\nIf you see this in a thread, it works! 🎯'\n  }\n}];\n\n// HOW TO GET REAL VALUES:\n// 1. Post a message in jordan-test channel\n// 2. Right-click the message → Copy → Copy link\n// 3. URL format: https://...slack.com/archives/CHANNEL_ID/pTIMESTAMP\n// 4. Extract: CHANNEL_ID and TIMESTAMP (like 1739817600.123456)\n// 5. Replace values above"
+        "jsCode": "// Test data - configured for real message\nreturn [{\n  json: {\n    channel: 'C08V21QL6KB',  // jordan-test channel\n    ts: '1771332463.941259',  // Real message timestamp from Slack\n    testMessage: '✅ **Test Reply** - This should appear in thread!\\n\\nIf you see this in a thread, it works! 🎯'\n  }\n}];"
       },
       "id": "test_data",
       "name": "Test Data",
