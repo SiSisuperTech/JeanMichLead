@@ -305,7 +305,8 @@
         "operation": "post",
         "channelId": "={{ $node[\"Qualify\"].json.channel }}",
         "text": "={{ $json.threadText }}",
-        "otherOptions": {
+        "options": {},
+        "additionalFields": {
           "thread_ts": "={{ $node[\"Qualify\"].json.ts }}"
         }
       },
