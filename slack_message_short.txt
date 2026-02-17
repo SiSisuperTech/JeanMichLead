@@ -1,0 +1,15 @@
+🤖 **Jean Mich Lead** is now live in #jordan-test!
+
+This AI bot automatically qualifies incoming leads:
+• Searches the web to verify if they're real dentists
+• Posts qualification results in thread replies
+• Shows: Name, contact info, RPPS number (if found), and source
+
+**What you'll see:**
+✅ Qualified → Follow up
+❌ Not qualified → Skip
+⚠️ Medium confidence → Double-check
+
+The bot uses Claude AI to search Doctolib, Ordre des Chirurgiens-Dentistes, practice websites, and more.
+
+Questions? Ping me or check the thread for details! 👇
