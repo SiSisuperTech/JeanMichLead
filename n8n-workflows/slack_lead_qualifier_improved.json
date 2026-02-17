@@ -305,10 +305,9 @@
         "operation": "post",
         "channelId": "={{ $node[\"Qualify\"].json.channel }}",
         "text": "={{ $json.threadText }}",
-        "options": {},
-        "additionalFields": {
-          "thread_ts": "={{ $node[\"Qualify\"].json.ts }}"
-        }
+        "replyToMessage": true,
+        "messageId": "={{ $node[\"Qualify\"].json.ts }}",
+        "options": {}
       },
       "id": "slack_reply_thread",
       "name": "Slack Reply in Thread",
