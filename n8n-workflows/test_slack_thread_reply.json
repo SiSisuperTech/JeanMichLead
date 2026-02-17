@@ -1,0 +1,86 @@
+{
+  "name": "Test Slack Thread Reply",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual_trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Test data - REPLACE these values with a real message from your Slack\nreturn [{\n  json: {\n    channel: 'C08V21QL6KB',  // jordan-test channel\n    ts: '1739817600.123456',  // REPLACE with real message timestamp\n    testMessage: '✅ **Test Reply** - This should appear in thread!\\n\\nIf you see this in a thread, it works! 🎯'\n  }\n}];\n\n// HOW TO GET REAL VALUES:\n// 1. Post a message in jordan-test channel\n// 2. Right-click the message → Copy → Copy link\n// 3. URL format: https://...slack.com/archives/CHANNEL_ID/pTIMESTAMP\n// 4. Extract: CHANNEL_ID and TIMESTAMP (like 1739817600.123456)\n// 5. Replace values above"
+      },
+      "id": "test_data",
+      "name": "Test Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channelId": "={{ $json.channel }}",
+        "text": "={{ $json.testMessage }}",
+        "options": {
+          "makeReply": {
+            "makeReply": true,
+            "value": "={{ $json.ts }}"
+          }
+        }
+      },
+      "id": "slack_reply",
+      "name": "Slack Reply in Thread",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        600,
+        0
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "sTJ0exGap7wzJAnr",
+          "name": "Slack account 2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Test Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Data": {
+      "main": [
+        [
+          {
+            "node": "Slack Reply in Thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
